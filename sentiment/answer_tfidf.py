@@ -7,7 +7,7 @@ from pyltp import Postagger  # 词性标注
 from pyltp import Parser  # 依存句法
 from pyltp import SementicRoleLabeller  # 角色标注
 
-from sentiment import dependency
+from sentiment.dependency import Dependency
 from sentiment.triple_extraction import TripleExtractor
 
 from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer  # 算法工具
@@ -75,6 +75,7 @@ class CommentParser(object):
                 print(label.index,
                       "".join(["%s:(%d,%d)" % (arg.name, arg.range.start, arg.range.end) for arg in label.arguments]))
         print(comment, self.parse_label_opinion(labels, words))
+        print(comment, self.parse_pos_opinion(arcs, words))
 
     def parse_label_opinion(self, labels, words):
         """
@@ -101,8 +102,15 @@ class CommentParser(object):
         for n, arc in enumerate(arcs):
             if arc.head == 0:
                 head = words[n]
-                head_index = n
+                head_index = n + 1
                 break
+
+        short = [head]
+        for n, arc in enumerate(arcs):
+            if arc.head == head_index and arc.relation in [Dependency.SBV.value, Dependency.VOB.value,
+                                                           Dependency.ATT.value, Dependency.ADV.value]:
+                short.append(words[n])
+        return short
 
     def parse_sentiment(self, arcs):
         for arc in arcs:
@@ -227,4 +235,4 @@ parser = CommentParser()
 #     for comment in comments:
 #         parser.sentence_segment_ltp(comment, False)
 
-parser.sentence_segment_ltp("入口即化，软绵绵的感觉，吃了还想吃，根本停不下来")
+parser.sentence_segment_ltp("第一次买就觉得味道不错，不腻")
