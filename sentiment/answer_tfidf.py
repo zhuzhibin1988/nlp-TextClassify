@@ -6,6 +6,9 @@ from pyltp import Segmentor  # 分词
 from pyltp import Postagger  # 词性标注
 from pyltp import Parser  # 依存句法
 from pyltp import SementicRoleLabeller  # 角色标注
+from pyltp import SentenceSplitter  # 分句
+
+import re
 
 from sentiment.dependency import Dependency
 from sentiment.triple_extraction import TripleExtractor
@@ -56,13 +59,44 @@ class CommentParser(object):
         return stopwords
 
     def sentence_segment_ltp(self, comment, print_each=True):
-        words = self.segmentor.segment(comment)
+        comment = self.format_sentence(comment)
+        words_list = [self.segmentor.segment(comment), self.sentence_segment_jieba(comment)]
+        opinions = set()
+        for words in words_list:
+            opinions.update(self.sentence_segment(words, print_each))
+        print(comment, self.distinct_opinion(list(opinions)))
+
+    @classmethod
+    def distinct_opinion(cls, opinions):
+        distinct_opinion_list = []
+        for n in range(1, len(opinions)):
+            for m in range(n, 0, -1):
+                if len(opinions[m]) > len(opinions[m - 1]):
+                    tmp = opinions[m - 1]
+                    opinions[m - 1] = opinions[m]
+                    opinions[m] = tmp
+
+        for opinion in opinions:
+            if len(distinct_opinion_list) == 0:
+                distinct_opinion_list.append(opinion)
+            else:
+                include = False
+                for idx in range(0, len(distinct_opinion_list)):
+                    try:
+                        include |= distinct_opinion_list[idx].index(opinion) > -1
+                    except ValueError:
+                        pass
+                if not include:
+                    distinct_opinion_list.append(opinion)
+
+        return distinct_opinion_list
+
+    def sentence_segment(self, words, print_each=True):
         postags = self.postagger.postag(words)
 
         word_tag_tuple_list = []
         for i in range(len(words)):
             word_tag_tuple_list.append((str(i), words[i], postags[i]))
-
         arcs = self.parser.parse(words, postags)
 
         # arcs 使用依存句法分析的结果
@@ -74,8 +108,13 @@ class CommentParser(object):
             for label in labels:
                 print(label.index,
                       "".join(["%s:(%d,%d)" % (arg.name, arg.range.start, arg.range.end) for arg in label.arguments]))
-        print(comment, self.parse_label_opinion(labels, words))
-        print(comment, self.parse_pos_opinion(arcs, words))
+        # print("label", comment, self.parse_label_opinion(labels, words))
+        # print("核心观点", comment, self.parse_pos_opinion(arcs, words))
+
+        result = self.parse_label_opinion2("v", arcs, words, postags)
+        result += self.parse_label_opinion2("a", arcs, words, postags)
+        # result.update(self.parse_label_opinion2("i", arcs, words, postags))
+        return result
 
     def parse_label_opinion(self, labels, words):
         """
@@ -98,6 +137,55 @@ class CommentParser(object):
             shorts.append(short + verb_word)
         return shorts
 
+    def parse_label_opinion2(self, core_pos, arcs, words, postags):
+        opinions = []
+        for n, postag in enumerate(postags):
+            if postag == core_pos:
+                core_opinion_list = []
+                self.opinion(n, arcs, words, postags, core_opinion_list)
+                if not self.opinion_single_pos(core_pos, core_opinion_list):
+                    # print(words[n], core_opinion_list)
+                    opinions.append((words[n], self.opinion_to_str(n, words, core_opinion_list)))
+        return opinions
+
+    def opinion(self, index, arcs, words, postags, core_opinion_list=[]):
+        for m, arc in enumerate(arcs):
+            if arc.head == index + 1 and arc.relation in [Dependency.SBV.value, Dependency.VOB.value,
+                                                          Dependency.CMP.value, Dependency.ADV.value,
+                                                          Dependency.ATT.value]:
+
+                # if (arc.relation == Dependency.HED.value and index == m) or (
+                #         arc.head == index + 1 and arc.relation in [Dependency.SBV.value, Dependency.VOB.value,
+                #                                                    Dependency.CMP.value, Dependency.ADV.value,
+                #                                                    Dependency.ATT.value]):
+                if arc.relation != Dependency.HED.value and postags[m] not in ["m", "q", "o", "c", "e"]:
+                    core_opinion_list.append((m, arc.relation, postags[m], words[m]))
+
+                idx = m + 1 if arc.relation == Dependency.HED.value else m
+                self.opinion(idx, arcs, words, postags, core_opinion_list)
+
+    @classmethod
+    def opinion_single_pos(cls, core_pos, core_opinion_list):
+        if len(core_opinion_list) == 0:
+            return True
+        single = False
+        for opinion in core_opinion_list:
+            single &= core_pos != opinion[2] or (core_pos == opinion[2] and Dependency.VOB.value == opinion[1])
+        return single
+
+    @classmethod
+    def opinion_to_str(cls, core_word_index, words, core_opinion_list):
+        index_list = [core_word_index]
+        for core_opinion in core_opinion_list:
+            index = core_opinion[0]
+            index_list.append(index)
+        index_list.sort()
+
+        opinion = ""
+        for index in index_list:
+            opinion += words[index]
+        return opinion
+
     def parse_pos_opinion(self, arcs, words):
         for n, arc in enumerate(arcs):
             if arc.head == 0:
@@ -111,32 +199,6 @@ class CommentParser(object):
                                                            Dependency.ATT.value, Dependency.ADV.value]:
                 short.append(words[n])
         return short
-
-    def parse_sentiment(self, arcs):
-        for arc in arcs:
-            arc.relation
-
-    def parse_head(self, arc, index, words, postags):
-        head = words[index]
-        return head
-
-    def parse_svb(self, arc, index, words, postags):
-        word = words[index]
-        head_word = words[arc.head]
-        short_sentence = head_word + word
-        return short_sentence
-
-    def parse_att(self, arc, index, words, postags):
-        word = words[index]
-        head_word = words[arc.head]
-        short_sentence = head_word + word
-        return short_sentence
-
-    def parse_svb(self, arc, index, words, postags):
-        word = words[index]
-        head_word = words[arc.head]
-        short_sentence = head_word + word
-        return short_sentence
 
     def sentence_segment_jieba(self, comment, stopword_list={}):
         """
@@ -225,14 +287,39 @@ class CommentParser(object):
         svos = extractor.triples_main(comment)
         print(svos)
 
+    def smart_split_sentence(self, comment):
+        sentences = re.split('(。|！|，|、|？|\.|!|,|\?)', comment)
+        for sentence in sentences:
+            words = self.segmentor.segment(comment)
+            postags = self.postagger.postag(words)
+
+    def format_sentence(self, comment):
+        try:
+            index = comment.index("因为")
+            if index < 0:
+                index = comment.index("由于")
+            comment = comment[index + 2:]
+        except ValueError:
+            pass
+        return re.sub(re.compile(r"(\s+)", re.S), "，", comment.strip())
+
 
 comment = "奶油和蛋糕的配置很合理，不会很腻，奶油的量恰到好处，一层咬下去很好吃，里面的水果也好吃"
 # construct_pow(True)
 # train_tfidf()
 
 parser = CommentParser()
-# with open("../data/comment", "r") as comments:
-#     for comment in comments:
-#         parser.sentence_segment_ltp(comment, False)
+with open("../data/comment", "r") as comments:
+    for comment in comments:
+        parser.sentence_segment_ltp(comment, False)
 
-parser.sentence_segment_ltp("第一次买就觉得味道不错，不腻")
+# parser.sentence_segment_ltp("不腻软罗糯")
+# parser.sentence_segment_ltp("做活动  买了几个  吃起来味道超级好  做活动还能保证口感  已经很厉害了")
+# parser.sentence_segment_ltp("最好不要再加上保护肾脏的")
+# parser.sentence_segment_ltp("吃一口觉得味蕾被迷住了")
+# parser.sentence_segment_ltp("第一次吃的时候，感觉不会特别甜，里面的蛋糕也很软，有淡淡的甜味 ")
+# parser.sentence_segment_ltp("做活动  买了几个  吃起来味道超级好  做活动还能保证口感  已经很厉害了")
+# parser.sentence_segment_ltp("朋友推荐，自己尝试，吃了不腻")
+# parser.sentence_segment_ltp("购买过一次四重奏，四种口味都非常喜欢。以后就喜欢上了幸福西饼的蛋糕")
+# parser.sentence_segment_ltp("爱上四重奏了，家人每隔一段时间就要吃一个哈哈哈哈哈哈都赞不绝口")
+# parser.sentence_segment_ltp("奶油和蛋糕的配置很合理，不会很腻，奶油的量恰到好处，一层咬下去很好吃，里面的水果也好吃 ")
