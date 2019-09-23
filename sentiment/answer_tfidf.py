@@ -26,7 +26,7 @@ import os
 4.计算句子的tfidf vector
 5.关键词提取
 """
-LTP_MODEL_DIR = "/Users/zhuzhibin/Program/python/qd/nlp/data/ltp_data_v3.4.0"
+LTP_MODEL_DIR = "E:/02program/python/nlp/data/ltp_data_v3.4.0"
 
 
 class CommentParser(object):
@@ -39,7 +39,7 @@ class CommentParser(object):
         self.segmentor.load(os.path.join(LTP_MODEL_DIR, "cws.model"))
         self.postagger.load(os.path.join(LTP_MODEL_DIR, "pos.model"))
         self.parser.load(os.path.join(LTP_MODEL_DIR, "parser.model"))  # 加载模型
-        self.labeller.load(os.path.join(LTP_MODEL_DIR, "pisrl.model"))  # 加载模型
+        self.labeller.load(os.path.join(LTP_MODEL_DIR, "pisrl_win.model"))  # 加载模型
 
     def release(self):
         self.labeller.release()
@@ -71,19 +71,22 @@ class CommentParser(object):
         distinct_opinion_list = []
         for n in range(1, len(opinions)):
             for m in range(n, 0, -1):
-                if len(opinions[m]) > len(opinions[m - 1]):
+                opi_1 = opinions[m][1]
+                opi_2 = opinions[m - 1][1]
+                if len(opi_1) > len(opi_2):
                     tmp = opinions[m - 1]
                     opinions[m - 1] = opinions[m]
                     opinions[m] = tmp
 
         for opinion in opinions:
+            opi = opinion[1]
             if len(distinct_opinion_list) == 0:
                 distinct_opinion_list.append(opinion)
             else:
                 include = False
                 for idx in range(0, len(distinct_opinion_list)):
                     try:
-                        include |= distinct_opinion_list[idx].index(opinion) > -1
+                        include |= distinct_opinion_list[idx][1].index(opi) > -1
                     except ValueError:
                         pass
                 if not include:
@@ -309,11 +312,11 @@ comment = "奶油和蛋糕的配置很合理，不会很腻，奶油的量恰到
 # train_tfidf()
 
 parser = CommentParser()
-with open("../data/comment", "r") as comments:
+with open("../data/comment", "r", encoding="utf-8") as comments:
     for comment in comments:
         parser.sentence_segment_ltp(comment, False)
 
-# parser.sentence_segment_ltp("不腻软罗糯")
+# parser.sentence_segment_ltp("朋友推荐，自己尝试，吃了不腻")
 # parser.sentence_segment_ltp("做活动  买了几个  吃起来味道超级好  做活动还能保证口感  已经很厉害了")
 # parser.sentence_segment_ltp("最好不要再加上保护肾脏的")
 # parser.sentence_segment_ltp("吃一口觉得味蕾被迷住了")
