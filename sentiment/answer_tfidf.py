@@ -60,14 +60,20 @@ class CommentParser(object):
 
     def sentence_segment_ltp(self, comment, print_each=True):
         comment = self.format_sentence(comment)
-        words_list = [self.segmentor.segment(comment), self.sentence_segment_jieba(comment)]
+        words_list = [self.segmentor.segment(comment)]
         opinions = set()
         for words in words_list:
             opinions.update(self.sentence_segment(words, print_each))
-        print(comment, self.distinct_opinion(list(opinions)))
+        # print(comment, self.distinct_opinion(list(opinions)))
+        print(comment, opinions)
 
     @classmethod
     def distinct_opinion(cls, opinions):
+        """
+        观点去重
+        :param opinions:
+        :return:
+        """
         distinct_opinion_list = []
         for n in range(1, len(opinions)):
             for m in range(n, 0, -1):
@@ -106,14 +112,11 @@ class CommentParser(object):
             print('  '.join('|'.join(tpl) for tpl in word_tag_tuple_list))
             print("\t".join("%d:%s" % (arc.head, arc.relation) for arc in arcs))
             for label in labels:
-                print(label.index,
-                      "".join(["%s:(%d,%d)" % (arg.name, arg.range.start, arg.range.end) for arg in label.arguments]))
+                print(label.index, "".join(["%s:(%d,%d)" % (arg.name, arg.range.start, arg.range.end) for arg in label.arguments]))
         # print("label", comment, self.parse_label_opinion(labels, words))
         # print("核心观点", comment, self.parse_pos_opinion(arcs, words))
 
-        result = self.parse_label_opinion2("v", arcs, words, postags)
-        result += self.parse_label_opinion2("a", arcs, words, postags)
-        # result.update(self.parse_label_opinion2("i", arcs, words, postags))
+        result = self.parse_label_opinion2(["v", "a", "i"], arcs, words, postags)
         return result
 
     def parse_label_opinion(self, labels, words):
@@ -138,34 +141,120 @@ class CommentParser(object):
         return shorts
 
     def parse_label_opinion2(self, core_pos, arcs, words, postags):
+        """
+        给出核心词性，解释所有该词性的短语观点
+        :param core_pos:
+        :param arcs:
+        :param words:
+        :param postags:
+        :return:
+        """
         opinions = []
         for n, postag in enumerate(postags):
-            if postag == core_pos:
+            if postag in core_pos:
                 core_opinion_list = []
-                self.opinion(n, arcs, words, postags, core_opinion_list)
-                if not self.opinion_single_pos(core_pos, core_opinion_list):
-                    # print(words[n], core_opinion_list)
-                    opinions.append((words[n], self.opinion_to_str(n, words, core_opinion_list)))
+                if postag == "v":
+                    self.parse_verb_opinion(n, arcs, words, postags, core_opinion_list)
+                elif postag == "a":
+                    self.parse_adj_opinion(n, arcs, words, postags, core_opinion_list)
+                # print(words[n], core_opinion_list)
+                if len(core_opinion_list) > 0:
+                    opinions.append((postag, words[n], self.opinion_to_str(n, words, core_opinion_list)))
         return opinions
 
-    def opinion(self, index, arcs, words, postags, core_opinion_list=[]):
+    def parse_verb_opinion(self, core_index, arcs, words, postags, core_opinion_list=[]):
+        sbv_att_words = []
+        sbv_word = ()
+        has_vob = False
+        available_arc_head_list = [core_index + 1]
+        root_index = None
+
+        def word_root_index(index):
+            """
+            查找词的root index
+            :return:
+            """
+            arc = arcs[index]
+            idx = index if arc.relation == Dependency.HED.value else arc.head - 1
+            if idx == core_index or idx == index:
+                nonlocal root_index
+                root_index = idx
+            else:
+                word_root_index(idx)
+
+        def verb_opinion(index):
+            """
+            提取以动词为核心的观点，提取的主要结构主谓结构（SBV）、动宾结构（VOB）、状中结构（ADV）、动补结构（CMP）、介宾结构（POB）
+            :return:
+            """
+            nonlocal sbv_att_words
+            nonlocal sbv_word
+            nonlocal has_vob
+            nonlocal available_arc_head_list
+
+            for m, arc in enumerate(arcs):
+                if arc.head == index + 1 and arc.relation in [Dependency.SBV.value, Dependency.VOB.value, Dependency.ATT.value, Dependency.CMP.value, Dependency.ADV.value, Dependency.POB.value, Dependency.RAD.value, Dependency.COO.value]:
+                    word_tuple = (m, arc.relation, postags[m], words[m])
+                    if arc.relation == Dependency.VOB.value:
+                        has_vob = True
+                    """
+                    词性过滤
+                    """
+                    if (arc.relation == Dependency.COO.value and postags[m] == "d") or (arc.relation not in [Dependency.HED.value, Dependency.COO.value] and postags[m] not in ["o", "c", "e", "m", "q", "p", "u", "nd", "b"]):
+                        """
+                            tuple格式：（index, 句法依存关系, 词性, 词）
+                        """
+                        word_root_index(m)
+                        if root_index == core_index:
+                            available_arc_head_list.append(m + 1)
+                            if arc.head in available_arc_head_list:
+                                if arc.relation == Dependency.SBV.value:
+                                    sbv_word = word_tuple
+                                    word_root_index(sbv_word[0])
+                                else:
+                                    if len(sbv_word) > 0 and root_index == sbv_word[0] and arc.relation != Dependency.SBV.value:
+                                        sbv_att_words.append(word_tuple)
+                                    else:
+                                        core_opinion_list.append((m, arc.relation, postags[m], words[m]))
+                    idx = m + 1 if arc.relation == Dependency.HED.value else m
+                    verb_opinion(idx)
+
+        verb_opinion(core_index)
+        """
+        三元组判断，只有包含了动宾结构才把主谓结构加入
+        """
+        if has_vob and len(sbv_word) > 0:
+            core_opinion_list.append(sbv_word)
+            core_opinion_list += sbv_att_words
+
+    def parse_adj_opinion(self, core_index, arcs, words, postags, core_opinion_list=[]):
+        """
+        提取以形容词为核心的观点，提取的主要结构主谓结构（SBV）、状中结构（ADV）
+        :param index:
+        :param arcs:
+        :param words:
+        :param postags:
+        :param core_opinion_list:
+        :return:
+        """
         for m, arc in enumerate(arcs):
-            if arc.head == index + 1 and arc.relation in [Dependency.SBV.value, Dependency.VOB.value,
-                                                          Dependency.CMP.value, Dependency.ADV.value,
-                                                          Dependency.ATT.value]:
-
-                # if (arc.relation == Dependency.HED.value and index == m) or (
-                #         arc.head == index + 1 and arc.relation in [Dependency.SBV.value, Dependency.VOB.value,
-                #                                                    Dependency.CMP.value, Dependency.ADV.value,
-                #                                                    Dependency.ATT.value]):
-                if arc.relation != Dependency.HED.value and postags[m] not in ["m", "q", "o", "c", "e"]:
+            if arc.head == core_index + 1 and arc.relation in [Dependency.SBV.value, Dependency.ADV.value, Dependency.ATT.value]:
+                """
+                词性过滤
+                """
+                if arc.relation != Dependency.HED.value and postags[m] not in ["o", "c", "e", "p", "u", "nd"]:
                     core_opinion_list.append((m, arc.relation, postags[m], words[m]))
-
                 idx = m + 1 if arc.relation == Dependency.HED.value else m
-                self.opinion(idx, arcs, words, postags, core_opinion_list)
+                self.parse_adj_opinion(idx, arcs, words, postags, core_opinion_list)
 
     @classmethod
     def opinion_single_pos(cls, core_pos, core_opinion_list):
+        """
+        是否只有一种词性
+        :param core_pos:
+        :param core_opinion_list:
+        :return:
+        """
         if len(core_opinion_list) == 0:
             return True
         single = False
@@ -175,6 +264,13 @@ class CommentParser(object):
 
     @classmethod
     def opinion_to_str(cls, core_word_index, words, core_opinion_list):
+        """
+        输出观点字符串
+        :param core_word_index:
+        :param words:
+        :param core_opinion_list:
+        :return:
+        """
         index_list = [core_word_index]
         for core_opinion in core_opinion_list:
             index = core_opinion[0]
@@ -185,20 +281,6 @@ class CommentParser(object):
         for index in index_list:
             opinion += words[index]
         return opinion
-
-    def parse_pos_opinion(self, arcs, words):
-        for n, arc in enumerate(arcs):
-            if arc.head == 0:
-                head = words[n]
-                head_index = n + 1
-                break
-
-        short = [head]
-        for n, arc in enumerate(arcs):
-            if arc.head == head_index and arc.relation in [Dependency.SBV.value, Dependency.VOB.value,
-                                                           Dependency.ATT.value, Dependency.ADV.value]:
-                short.append(words[n])
-        return short
 
     def sentence_segment_jieba(self, comment, stopword_list={}):
         """
@@ -309,9 +391,9 @@ comment = "奶油和蛋糕的配置很合理，不会很腻，奶油的量恰到
 # train_tfidf()
 
 parser = CommentParser()
-with open("../data/comment", "r") as comments:
-    for comment in comments:
-        parser.sentence_segment_ltp(comment, False)
+# with open("../data/comment", "r") as comments:
+#     for comment in comments:
+#         parser.sentence_segment_ltp(comment, False)
 
 # parser.sentence_segment_ltp("不腻软罗糯")
 # parser.sentence_segment_ltp("做活动  买了几个  吃起来味道超级好  做活动还能保证口感  已经很厉害了")
@@ -323,3 +405,7 @@ with open("../data/comment", "r") as comments:
 # parser.sentence_segment_ltp("购买过一次四重奏，四种口味都非常喜欢。以后就喜欢上了幸福西饼的蛋糕")
 # parser.sentence_segment_ltp("爱上四重奏了，家人每隔一段时间就要吃一个哈哈哈哈哈哈都赞不绝口")
 # parser.sentence_segment_ltp("奶油和蛋糕的配置很合理，不会很腻，奶油的量恰到好处，一层咬下去很好吃，里面的水果也好吃 ")
+# parser.sentence_segment_ltp("产品颜值高，多口味，更健康")
+# parser.sentence_segment_ltp("根本停不下来")
+# parser.sentence_segment_ltp("看上去不太好闻")  # parser.sentence_segment_ltp("去屑效果好")
+parser.sentence_segment_ltp("家人朋友吃了都说好吃噢，不是很腻，喜欢吃")
