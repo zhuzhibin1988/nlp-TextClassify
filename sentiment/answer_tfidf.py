@@ -115,7 +115,8 @@ class CommentParser(object):
             print('  '.join('|'.join(tpl) for tpl in word_tag_tuple_list))
             print("\t".join("%d:%s" % (arc.head, arc.relation) for arc in arcs))
             for label in labels:
-                print(label.index, "".join(["%s:(%d,%d)" % (arg.name, arg.range.start, arg.range.end) for arg in label.arguments]))
+                print(label.index,
+                      "".join(["%s:(%d,%d)" % (arg.name, arg.range.start, arg.range.end) for arg in label.arguments]))
         # print("label", comment, self.parse_label_opinion(labels, words))
         # print("核心观点", comment, self.parse_pos_opinion(arcs, words))
 
@@ -172,18 +173,19 @@ class CommentParser(object):
         available_arc_head_list = [core_index + 1]
         root_index = None
 
-        def word_root_index(index):
+        def word_root_index(core_idx, index):
             """
             查找词的root index
             :return:
             """
+            nonlocal root_index
+            root_index = None
             arc = arcs[index]
             idx = index if arc.relation == Dependency.HED.value else arc.head - 1
-            if idx == core_index or idx == index:
-                nonlocal root_index
+            if idx == core_idx or idx == index:
                 root_index = idx
             else:
-                word_root_index(idx)
+                word_root_index(core_idx, idx)
 
         def verb_opinion(index):
             """
@@ -196,27 +198,34 @@ class CommentParser(object):
             nonlocal available_arc_head_list
 
             for m, arc in enumerate(arcs):
-                if arc.head == index + 1 and arc.relation in [Dependency.SBV.value, Dependency.VOB.value, Dependency.ATT.value, Dependency.CMP.value, Dependency.ADV.value, Dependency.POB.value, Dependency.RAD.value, Dependency.COO.value]:
+                if arc.head == index + 1 and arc.relation in [Dependency.SBV.value, Dependency.VOB.value, Dependency.ATT.value, Dependency.CMP.value,
+                                                              Dependency.ADV.value, Dependency.POB.value, Dependency.RAD.value, Dependency.COO.value]:
+                    """
+                        tuple格式：（index, 句法依存关系, 词性, 词）
+                    """
                     word_tuple = (m, arc.relation, postags[m], words[m])
-                    if arc.relation == Dependency.VOB.value:
-                        has_vob = True
                     """
-                    词性过滤
+                        计算词的root词是否等于关键词
                     """
-                    if (arc.relation == Dependency.COO.value and postags[m] == "d") or (arc.relation not in [Dependency.HED.value, Dependency.COO.value] and postags[m] not in ["o", "c", "e", "m", "q", "p", "u", "nd", "b"]):
-                        """
-                            tuple格式：（index, 句法依存关系, 词性, 词）
-                        """
-                        word_root_index(m)
-                        if root_index == core_index:
-                            available_arc_head_list.append(m + 1)
+                    word_root_index(core_index, m)
+                    if root_index == core_index:
+                        available_arc_head_list.append(m + 1)
+                        if arc.relation == Dependency.VOB.value and (arc.head - 1) == core_index:
+                            has_vob = True
+                            core_opinion_list.append((m, arc.relation, postags[m], words[m]))
+                        elif (arc.relation == Dependency.COO.value and postags[m] == "d") or (
+                                arc.relation not in [Dependency.HED.value, Dependency.COO.value] and postags[m] not in ["o", "c", "e", "m", "q", "p", "u", "nd", "b"]):
                             if arc.head in available_arc_head_list:
                                 if arc.relation == Dependency.SBV.value:
                                     sbv_word = word_tuple
-                                    word_root_index(sbv_word[0])
                                 else:
-                                    if len(sbv_word) > 0 and root_index == sbv_word[0] and arc.relation != Dependency.SBV.value:
-                                        sbv_att_words.append(word_tuple)
+                                    """
+                                        计算词的root词是否等于sbv关键词
+                                    """
+                                    if len(sbv_word) > 0:
+                                        word_root_index(sbv_word[0], word_tuple[0])
+                                        if root_index == sbv_word[0] and arc.relation != Dependency.SBV.value:
+                                            sbv_att_words.append(word_tuple)
                                     else:
                                         core_opinion_list.append((m, arc.relation, postags[m], words[m]))
                     idx = m + 1 if arc.relation == Dependency.HED.value else m
@@ -241,7 +250,8 @@ class CommentParser(object):
         :return:
         """
         for m, arc in enumerate(arcs):
-            if arc.head == core_index + 1 and arc.relation in [Dependency.SBV.value, Dependency.ADV.value, Dependency.ATT.value]:
+            if arc.head == core_index + 1 and arc.relation in [Dependency.SBV.value, Dependency.ADV.value,
+                                                               Dependency.ATT.value]:
                 """
                 词性过滤
                 """
@@ -394,9 +404,9 @@ comment = "奶油和蛋糕的配置很合理，不会很腻，奶油的量恰到
 # train_tfidf()
 
 parser = CommentParser()
-with open("../data/comment", "r", encoding="utf-8") as comments:
-    for comment in comments:
-        parser.sentence_segment_ltp(comment, False)
+# with open("../data/comment", "r", encoding="utf-8") as comments:
+#     for comment in comments:
+#         parser.sentence_segment_ltp(comment, False)
 
 # parser.sentence_segment_ltp("不腻软罗糯")
 # parser.sentence_segment_ltp("做活动  买了几个  吃起来味道超级好  做活动还能保证口感  已经很厉害了")
@@ -411,4 +421,6 @@ with open("../data/comment", "r", encoding="utf-8") as comments:
 # parser.sentence_segment_ltp("产品颜值高，多口味，更健康")
 # parser.sentence_segment_ltp("根本停不下来")
 # parser.sentence_segment_ltp("看上去不太好闻")  # parser.sentence_segment_ltp("去屑效果好")
-parser.sentence_segment_ltp("家人朋友吃了都说好吃噢，不是很腻，喜欢吃")
+# parser.sentence_segment_ltp("家人朋友吃了都说好吃噢，不是很腻，喜欢吃")
+parser.sentence_segment_ltp("入口即化，软绵绵的感觉，吃了还想吃，根本停不下来")
+parser.sentence_segment_ltp("雪顶榴心里面超级多榴莲，味道也很正，芒果拿破仑超越其他更贵的蛋糕店...")
