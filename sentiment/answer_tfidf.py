@@ -11,11 +11,15 @@ from pyltp import SentenceSplitter  # 分句
 import re
 
 from sentiment.dependency import Dependency
+from sentiment.pos import Pos
 from sentiment.triple_extraction import TripleExtractor
 
 from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer  # 算法工具
 import numpy as np  # 矩阵工具
 import nltk
+
+import pandas as pd
+from itertools import islice
 
 import os
 
@@ -26,7 +30,7 @@ import os
 4.计算句子的tfidf vector
 5.关键词提取
 """
-LTP_MODEL_DIR = "E:/02program/python/nlp/data/ltp_data_v3.4.0"
+LTP_MODEL_DIR = "/Users/zhuzhibin/Program/python/qd/nlp/data/ltp_data_v3.4.0"
 
 
 class CommentParser(object):
@@ -39,7 +43,11 @@ class CommentParser(object):
         self.segmentor.load(os.path.join(LTP_MODEL_DIR, "cws.model"))
         self.postagger.load(os.path.join(LTP_MODEL_DIR, "pos.model"))
         self.parser.load(os.path.join(LTP_MODEL_DIR, "parser.model"))  # 加载模型
-        self.labeller.load(os.path.join(LTP_MODEL_DIR, "pisrl_win.model"))  # 加载模型
+        self.labeller.load(os.path.join(LTP_MODEL_DIR, "pisrl.model"))  # 加载模型
+
+        self.adv_dict_list = self.adverb_dictionary_list()
+        self.pronoun_list = self.pronounlist()
+        self.stopword_list = self.stopwordlist("之前", "是因为", "已经")
 
     def release(self):
         self.labeller.release()
@@ -47,7 +55,8 @@ class CommentParser(object):
         self.postagger.release()
         self.segmentor.release()
 
-    def stopwordlist(self, *self_define_stopwords):
+    @classmethod
+    def stopwordlist(cls, *self_define_stopwords):
         """
         get stopwords list
         :param self_define_stopwords: add self define stop word to stopwords list
@@ -58,14 +67,30 @@ class CommentParser(object):
             stopwords.append(stopword)
         return stopwords
 
+    @classmethod
+    def adverb_dictionary_list(cls):
+        dictionary = {}
+        with open("../data/adv.txt", "r") as adv_file:
+            for line in adv_file:
+                index = line.index(":")
+                key = line[0: index].strip()
+                value = line[index + 1:len(line) - 1].strip()
+                dictionary.update({key: value.split(" ")})
+        return dictionary
+
+    @classmethod
+    def pronounlist(cls):
+        with open("../data/pronoun.txt", "r") as adv_file:
+            for line in adv_file:
+                pronoun_list = line.split(" ")
+        return pronoun_list
+
     def sentence_segment_ltp(self, comment, print_each=True):
         comment = self.format_sentence(comment)
-        words_list = [self.segmentor.segment(comment)]
-        opinions = set()
-        for words in words_list:
-            opinions.update(self.sentence_segment(words, print_each))
+        words = self.segmentor.segment(comment)
+        opinions = self.sentence_segment(words, print_each)
         # print(comment, self.distinct_opinion(list(opinions)))
-        print(comment, opinions)
+        print(comment, "main:", opinions[0], "others:", opinions[1], "\n")
 
     @classmethod
     def distinct_opinion(cls, opinions):
@@ -112,16 +137,17 @@ class CommentParser(object):
         labels = self.labeller.label(words, postags, arcs)  # 语义角色标注
         if print_each:
             print("|".join(words))
-            print('  '.join('|'.join(tpl) for tpl in word_tag_tuple_list))
-            print("\t".join("%d:%s" % (arc.head, arc.relation) for arc in arcs))
+            print("  ".join('|'.join(tpl) for tpl in word_tag_tuple_list))
+            print("  ".join("%d|%d:%s" % (n, arc.head, arc.relation) for n, arc in enumerate(arcs)))
             for label in labels:
-                print(label.index,
-                      "".join(["%s:(%d,%d)" % (arg.name, arg.range.start, arg.range.end) for arg in label.arguments]))
+                print(label.index, "".join(["%s:(%d,%d)" % (arg.name, arg.range.start, arg.range.end) for arg in label.arguments]))
         # print("label", comment, self.parse_label_opinion(labels, words))
         # print("核心观点", comment, self.parse_pos_opinion(arcs, words))
 
-        result = self.parse_label_opinion2(["v", "a", "i"], arcs, words, postags)
-        return result
+        core_opinion_list = []
+        core_opinion = self.parse_core_opinion(arcs, words, postags, core_opinion_list)
+        opinions = self.parse_label_opinion2(["v", "a", "i", "z"], arcs, words, postags)
+        return core_opinion, opinions
 
     def parse_label_opinion(self, labels, words):
         """
@@ -154,84 +180,115 @@ class CommentParser(object):
         :return:
         """
         opinions = []
-        for n, postag in enumerate(postags):
-            if postag in core_pos:
+        for n, arc in enumerate(arcs):
+            if arc.relation in [Dependency.HED.value, Dependency.COO.value]:
                 core_opinion_list = []
-                if postag == "v":
-                    self.parse_verb_opinion(n, arcs, words, postags, core_opinion_list)
-                elif postag == "a":
-                    self.parse_adj_opinion(n, arcs, words, postags, core_opinion_list)
-                # print(words[n], core_opinion_list)
-                if len(core_opinion_list) > 0:
+                postag = postags[n]
+                core_opinion_list = self.parse_opinion(n, arcs, words, postags)
+
+                # if postag == "v" and words[n] not in ["有", "想"]:
+                #     self.parse_verb_opinion(n, arcs, words, postags, core_opinion_list)
+                # elif postag in ["a", "i"]:
+                #     self.parse_adj_opinion(n, arcs, words, postags, core_opinion_list)
+                # # print(words[n], core_opinion_list)
+                if not self.opinion_single_pos(postag, core_opinion_list):
                     opinions.append((postag, words[n], self.opinion_to_str(n, words, core_opinion_list)))
         return opinions
 
-    def parse_verb_opinion(self, core_index, arcs, words, postags, core_opinion_list=[]):
-        sbv_att_words = []
-        sbv_word = ()
+    def parse_core_opinion(self, arcs, words, postags, core_opinion_list=[]):
+        for n, arc in enumerate(arcs):
+            if arc.relation == Dependency.HED.value:
+                core_index = n
+        core_pos = postags[core_index]
+        return core_pos, words[core_index], self.opinion_to_str(core_index, words, self.parse_opinion(core_index, arcs, words, postags))
+        # if core_pos == "v":
+        #     self.parse_verb_opinion(core_index, arcs, words, postags, core_opinion_list)
+        # elif core_pos == "a":
+        #     self.parse_adj_opinion(core_index, arcs, words, postags, core_opinion_list)
+        # return core_pos, words[core_index], self.opinion_to_str(core_index, words, core_opinion_list)
+
+    def parse_verb_opinion(self, verb_index, arcs, words, postags, core_opinion_list=[]):
+        """
+
+        :param verb_index: 核心动词下标
+        :param arcs:
+        :param words:
+        :param postags:
+        :param core_opinion_list: 核心动词的观点词list
+        :return:
+        """
         has_vob = False
-        available_arc_head_list = [core_index + 1]
-        root_index = None
+        sbv_word = ()
+        sbv_att_words = []
+        available_word_idx_list = [verb_index]
 
         def word_root_index(core_idx, index):
             """
             查找词的root index
             :return:
             """
-            nonlocal root_index
-            root_index = None
             arc = arcs[index]
             idx = index if arc.relation == Dependency.HED.value else arc.head - 1
             if idx == core_idx or idx == index:
-                root_index = idx
+                return idx
             else:
-                word_root_index(core_idx, idx)
+                return word_root_index(core_idx, idx)
 
         def verb_opinion(index):
             """
             提取以动词为核心的观点，提取的主要结构主谓结构（SBV）、动宾结构（VOB）、状中结构（ADV）、动补结构（CMP）、介宾结构（POB）
             :return:
             """
-            nonlocal sbv_att_words
-            nonlocal sbv_word
             nonlocal has_vob
-            nonlocal available_arc_head_list
+            nonlocal sbv_word
+            nonlocal sbv_att_words
+            nonlocal available_word_idx_list
 
             for m, arc in enumerate(arcs):
+                """
+                    tuple格式：（index, 句法依存关系, 词性, 词）
+                """
+                word_tuple = (m, arc.relation, postags[m], words[m])
+
+                """
+                    父节点词
+                """
                 if arc.head == index + 1 and arc.relation in [Dependency.SBV.value, Dependency.VOB.value, Dependency.ATT.value, Dependency.CMP.value,
-                                                              Dependency.ADV.value, Dependency.POB.value, Dependency.RAD.value, Dependency.COO.value]:
-                    """
-                        tuple格式：（index, 句法依存关系, 词性, 词）
-                    """
-                    word_tuple = (m, arc.relation, postags[m], words[m])
+                                                              Dependency.ADV.value, Dependency.POB.value, Dependency.RAD.value]:
                     """
                         计算词的root词是否等于关键词
                     """
-                    word_root_index(core_index, m)
-                    if root_index == core_index:
-                        available_arc_head_list.append(m + 1)
-                        if arc.relation == Dependency.VOB.value and (arc.head - 1) == core_index:
+                    root_verb_index = word_root_index(verb_index, m)
+                    if root_verb_index == verb_index:
+                        if arc.relation == Dependency.VOB.value and (arc.head - 1) == verb_index:
                             has_vob = True
+                            available_word_idx_list.append(m)
                             core_opinion_list.append((m, arc.relation, postags[m], words[m]))
-                        elif (arc.relation == Dependency.COO.value and postags[m] == "d") or (
-                                arc.relation not in [Dependency.HED.value, Dependency.COO.value] and postags[m] not in ["o", "c", "e", "m", "q", "p", "u", "nd", "b"]):
-                            if arc.head in available_arc_head_list:
+                        # elif (arc.relation == Dependency.COO.value and postags[m] != "v") or (arc.relation != Dependency.COO.value and postags[m] not in ["o", "c", "e", "m", "q", "p", "u", "nd", "b"]):
+                        elif postags[m] not in ["o", "c", "e", "m", "q", "p", "nd", "b"]:
+                            if arc.head - 1 in available_word_idx_list:
+                                available_word_idx_list.append(m)
+                                """
+                                    若是主谓结构先暂存，不加入观点词list
+                                """
                                 if arc.relation == Dependency.SBV.value:
                                     sbv_word = word_tuple
                                 else:
                                     """
-                                        计算词的root词是否等于sbv关键词
+                                       计算词的root词是否等于sbv关键词
                                     """
-                                    if len(sbv_word) > 0:
-                                        word_root_index(sbv_word[0], word_tuple[0])
-                                        if root_index == sbv_word[0] and arc.relation != Dependency.SBV.value:
-                                            sbv_att_words.append(word_tuple)
+                                    sbv_index = sbv_word[0] if len(sbv_word) > 0 else -1
+                                    root_sbv_index = word_root_index(sbv_index, word_tuple[0])
+                                    if root_sbv_index == sbv_index:
+                                        """
+                                            若是主谓结构的其他属性词，暂存在主谓属性词列表
+                                        """
+                                        sbv_att_words.append(word_tuple)
                                     else:
                                         core_opinion_list.append((m, arc.relation, postags[m], words[m]))
-                    idx = m + 1 if arc.relation == Dependency.HED.value else m
-                    verb_opinion(idx)
+                    verb_opinion(m)
 
-        verb_opinion(core_index)
+        verb_opinion(verb_index)
         """
         三元组判断，只有包含了动宾结构才把主谓结构加入
         """
@@ -239,10 +296,10 @@ class CommentParser(object):
             core_opinion_list.append(sbv_word)
             core_opinion_list += sbv_att_words
 
-    def parse_adj_opinion(self, core_index, arcs, words, postags, core_opinion_list=[]):
+    def parse_adj_opinion(self, adj_index, arcs, words, postags, core_opinion_list=[]):
         """
         提取以形容词为核心的观点，提取的主要结构主谓结构（SBV）、状中结构（ADV）
-        :param index:
+        :param adj_index:
         :param arcs:
         :param words:
         :param postags:
@@ -250,8 +307,7 @@ class CommentParser(object):
         :return:
         """
         for m, arc in enumerate(arcs):
-            if arc.head == core_index + 1 and arc.relation in [Dependency.SBV.value, Dependency.ADV.value,
-                                                               Dependency.ATT.value]:
+            if arc.head == adj_index + 1 and arc.relation in [Dependency.SBV.value, Dependency.ADV.value, Dependency.ATT.value]:
                 """
                 词性过滤
                 """
@@ -268,12 +324,9 @@ class CommentParser(object):
         :param core_opinion_list:
         :return:
         """
-        if len(core_opinion_list) == 0:
+        if len(core_opinion_list) == 0 and core_pos == "v":
             return True
-        single = False
-        for opinion in core_opinion_list:
-            single &= core_pos != opinion[2] or (core_pos == opinion[2] and Dependency.VOB.value == opinion[1])
-        return single
+        return False
 
     @classmethod
     def opinion_to_str(cls, core_word_index, words, core_opinion_list):
@@ -332,7 +385,7 @@ class CommentParser(object):
         """
         stopword_list = {}
         if use_stopwords:
-            stopword_list = self.stopwordlist("之前", "是因为", "已经")
+            stopword_list = self.stopword_list
         dictionary = set()
         with open("../data/comment", "r") as comments:
             for comment in comments:
@@ -398,6 +451,129 @@ class CommentParser(object):
             pass
         return re.sub(re.compile(r"(\s+)", re.S), "，", comment.strip())
 
+    def available_composition(self, parent_pos, parent_word, current_arc_relation, current_arc_pos, current_word):
+        """
+            判断词性与依存关系组合的有效性
+        :param parent_pos: 父节点的词性
+        :param parent_word: 父节点的词
+        :param current_arc_relation: 当前节点的依存关系
+        :param current_arc_pos: 当前节点的词词性
+        :param current_word: 当前节点的词
+        :return:
+        """
+        if parent_pos == Pos.v.value:
+            if current_arc_relation == Dependency.SBV.value:
+                return True
+            if current_arc_relation == Dependency.VOB.value:
+                return True
+            if current_arc_relation == Dependency.ADV.value and current_word in self.adv_dict_list.get("肯否副词"):
+                return True
+            if current_arc_relation == Dependency.ATT.value:
+                return True
+            if current_arc_relation == Dependency.CMP.value:
+                return True
+        elif parent_pos == Pos.a.value:
+            if current_arc_relation == Dependency.SBV.value:  # e.g.:材料新鲜
+                return True
+            if current_arc_relation == Dependency.ADV.value and (current_word not in self.adv_dict_list.get("程度副词") + self.adv_dict_list.get("范围副词") or (current_arc_pos == Pos.p.value and current_word in ["比"])):  # 比别家好
+                return True
+            if current_arc_relation == Dependency.ATT.value:
+                return True
+        elif parent_pos in [Pos.n.value, Pos.nd.value, Pos.ni.value, Pos.nl.value, Pos.ns.value, Pos.nt.value, Pos.nz.value]:
+            if current_arc_relation == Dependency.ADV.value:
+                return True
+            if current_arc_relation == Dependency.ATT.value:  # 属性语义修饰名词
+                return True
+        elif parent_pos == Pos.p.value:
+            if current_arc_relation == Dependency.POB.value:  # 比别家好
+                return True
+        elif parent_pos in [Pos.i.value, Pos.r.value, Pos.q.value] or current_arc_relation == Dependency.CMP.value:
+            return True
+        return False
+
+    def parse_opinion(self, core_word_index, arcs, words, postags):
+        has_vob = False
+        sbv_word = ()
+        sbv_att_word_list = []
+        available_word_idx_list = [core_word_index]
+        opinion_word_list = []
+
+        def word_root_index(core_word_idx, index):
+            """
+            查找词的root index
+            :return:
+            """
+            arc = arcs[index]
+            idx = index if arc.relation == Dependency.HED.value else arc.head - 1
+            if idx == core_word_idx or idx == index:
+                return idx
+            else:
+                return word_root_index(core_word_idx, idx)
+
+        def verb_opinion(core_word_idx):
+            """
+            提取以动词为核心的观点，提取的主要结构主谓结构（SBV）、动宾结构（VOB）、状中结构（ADV）、动补结构（CMP）、介宾结构（POB）
+            :return:
+            """
+            nonlocal has_vob
+            nonlocal sbv_word
+            nonlocal sbv_att_word_list
+            nonlocal available_word_idx_list
+
+            for m, arc in enumerate(arcs):
+                """
+                    tuple格式：（index, 句法依存关系, 词性, 词）
+                """
+                current_word_tuple = (m, arc.relation, postags[m], words[m])
+
+                parent_word_index = arc.head - 1
+                parent_word_tuple = (parent_word_index, arcs[parent_word_index].relation, postags[parent_word_index], words[parent_word_index])
+                if arc.head == core_word_idx + 1 \
+                        and postags[core_word_index] not in [Pos.wp.value, Pos.o.value, Pos.c.value] \
+                        and self.available_composition(parent_word_tuple[2], parent_word_tuple[3], current_word_tuple[1], current_word_tuple[2], current_word_tuple[3]):
+
+                    """
+                        计算词的root词是否等于关键词
+                    """
+                    root_core_index = word_root_index(core_word_index, m)
+                    if root_core_index == core_word_index:
+                        if arc.relation == Dependency.VOB.value:
+                            has_vob = True
+                            available_word_idx_list.append(m)
+                            opinion_word_list.append(current_word_tuple)
+                        else:
+                            if arc.head - 1 in available_word_idx_list:
+                                available_word_idx_list.append(m)
+                                """
+                                    若是主谓结构先暂存，不加入观点词list
+                                """
+                                if arc.relation == Dependency.SBV.value:
+                                    sbv_word = current_word_tuple
+                                else:
+                                    """
+                                       计算词的root词是否等于sbv关键词
+                                    """
+                                    sbv_index = sbv_word[0] if len(sbv_word) > 0 else -1
+                                    root_sbv_index = word_root_index(sbv_index, current_word_tuple[0])
+                                    if root_sbv_index == sbv_index:
+                                        """
+                                            若是主谓结构的其他属性词，暂存在主谓属性词列表
+                                        """
+                                        sbv_att_word_list.append(current_word_tuple)
+                                    else:
+                                        opinion_word_list.append(current_word_tuple)
+                        verb_opinion(m)
+
+        verb_opinion(core_word_index)
+        """
+        三元组判断，只有包含了动宾结构才把主谓结构加入
+        """
+        if (has_vob or postags[core_word_index] == Pos.a.value) and len(sbv_word) > 0:
+            opinion_word_list.append(sbv_word)
+            opinion_word_list += sbv_att_word_list
+
+        return opinion_word_list
+
 
 comment = "奶油和蛋糕的配置很合理，不会很腻，奶油的量恰到好处，一层咬下去很好吃，里面的水果也好吃"
 # construct_pow(True)
@@ -406,9 +582,9 @@ comment = "奶油和蛋糕的配置很合理，不会很腻，奶油的量恰到
 parser = CommentParser()
 # with open("../data/comment", "r", encoding="utf-8") as comments:
 #     for comment in comments:
-#         parser.sentence_segment_ltp(comment, False)
+#         parser.sentence_segment_ltp(comment)
 
-# parser.sentence_segment_ltp("不腻软罗糯")
+parser.sentence_segment_ltp("我觉得还好")
 # parser.sentence_segment_ltp("做活动  买了几个  吃起来味道超级好  做活动还能保证口感  已经很厉害了")
 # parser.sentence_segment_ltp("最好不要再加上保护肾脏的")
 # parser.sentence_segment_ltp("吃一口觉得味蕾被迷住了")
@@ -416,11 +592,11 @@ parser = CommentParser()
 # parser.sentence_segment_ltp("做活动  买了几个  吃起来味道超级好  做活动还能保证口感  已经很厉害了")
 # parser.sentence_segment_ltp("朋友推荐，自己尝试，吃了不腻")
 # parser.sentence_segment_ltp("购买过一次四重奏，四种口味都非常喜欢。以后就喜欢上了幸福西饼的蛋糕")
-# parser.sentence_segment_ltp("爱上四重奏了，家人每隔一段时间就要吃一个哈哈哈哈哈哈都赞不绝口")
+# parser.sentence_segment_ltp("对幸福西饼的蛋糕口感印象深刻 ")
 # parser.sentence_segment_ltp("奶油和蛋糕的配置很合理，不会很腻，奶油的量恰到好处，一层咬下去很好吃，里面的水果也好吃 ")
 # parser.sentence_segment_ltp("产品颜值高，多口味，更健康")
-# parser.sentence_segment_ltp("根本停不下来")
-# parser.sentence_segment_ltp("看上去不太好闻")  # parser.sentence_segment_ltp("去屑效果好")
-# parser.sentence_segment_ltp("家人朋友吃了都说好吃噢，不是很腻，喜欢吃")
-parser.sentence_segment_ltp("入口即化，软绵绵的感觉，吃了还想吃，根本停不下来")
-parser.sentence_segment_ltp("雪顶榴心里面超级多榴莲，味道也很正，芒果拿破仑超越其他更贵的蛋糕店...")
+# parser.sentence_segment_ltp("之前吃了一个貌似是榴莲千层雪的蛋糕，口感超棒！")
+# parser.sentence_segment_ltp("蛋糕蓬松，奶油味道香 ")
+# parser.sentence_segment_ltp("第一次吃的时候，感觉不会特别甜，里面的蛋糕也很软，有淡淡的甜味 ")
+# parser.sentence_segment_ltp("入口即化，软绵绵的感觉，吃了还想吃，根本停不下来")
+# parser.sentence_segment_ltp("芒果蛋糕口味比别家好太多了 ")
