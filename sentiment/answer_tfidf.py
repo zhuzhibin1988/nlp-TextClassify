@@ -18,8 +18,7 @@ from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer  #
 import numpy as np  # 矩阵工具
 import nltk
 
-import pandas as pd
-from itertools import islice
+from gensim import corpora, models
 
 import os
 
@@ -45,9 +44,10 @@ class CommentParser(object):
         self.parser.load(os.path.join(LTP_MODEL_DIR, "parser.model"))  # 加载模型
         self.labeller.load(os.path.join(LTP_MODEL_DIR, "pisrl.model"))  # 加载模型
 
-        self.adv_dict_list = self.adverb_dictionary_list()
-        self.pronoun_list = self.pronounlist()
-        self.stopword_list = self.stopwordlist("之前", "是因为", "已经")
+        self.adv_dict_list = self.load_adverb_dictionary()
+        self.pronoun_list = self.load_pronoun_words()
+        self.vi_list = self.load_intransitive_verb()
+        self.stopword_list = self.load_stopwords("之前", "是因为", "已经")
 
     def release(self):
         self.labeller.release()
@@ -56,41 +56,57 @@ class CommentParser(object):
         self.segmentor.release()
 
     @classmethod
-    def stopwordlist(cls, *self_define_stopwords):
+    def load_stopwords(cls, *self_define_stopwords):
         """
         get stopwords list
         :param self_define_stopwords: add self define stop word to stopwords list
-        :return: stopwordlist
+        :return: stopwords_list
         """
-        stopwords = [word.strip() for word in open("../data/stopwords", "r").readlines()]
+        stopwords_list = [word.strip() for word in open("../data/stopwords.txt", "r").readlines()]
         for stopword in self_define_stopwords:
-            stopwords.append(stopword)
-        return stopwords
+            stopwords_list.append(stopword)
+        return stopwords_list
 
     @classmethod
-    def adverb_dictionary_list(cls):
-        dictionary = {}
-        with open("../data/adv.txt", "r") as adv_file:
-            for line in adv_file:
-                index = line.index(":")
-                key = line[0: index].strip()
-                value = line[index + 1:len(line) - 1].strip()
-                dictionary.update({key: value.split(" ")})
-        return dictionary
+    def load_intransitive_verb(cls):
+        intransitive_verb = []
+        with open("../data/intransitive_verb.txt", "r") as vi_file:
+            for word in vi_file.readlines():
+                intransitive_verb.append(word.strip())
+        return intransitive_verb
 
     @classmethod
-    def pronounlist(cls):
-        with open("../data/pronoun.txt", "r") as adv_file:
-            for line in adv_file:
+    def load_pronoun_words(cls):
+        with open("../data/pronoun.txt", "r") as pronoun_file:
+            for line in pronoun_file.readlines():
                 pronoun_list = line.split(" ")
         return pronoun_list
+
+    @classmethod
+    def load_adverb_dictionary(cls):
+        dictionary = {}
+        with open("../data/adv.txt", "r") as adv_file:
+            for line in adv_file.readlines():
+                index = line.index(":")
+                key = line[0: index].strip()
+                value = line[index + 1:].strip()
+                dictionary.update({key: value.split(" ")})
+        return dictionary
 
     def sentence_segment_ltp(self, comment, print_each=True):
         comment = self.format_sentence(comment)
         words = self.segmentor.segment(comment)
         opinions = self.sentence_segment(words, print_each)
         # print(comment, self.distinct_opinion(list(opinions)))
-        print(comment, "main:", opinions[0], "others:", opinions[1], "\n")
+        return opinions
+
+    def all_comment_opinions(self, comments):
+        opinions_list = []
+        for comment in comments:
+            opinions = self.sentence_segment_ltp(comment, False)
+            for opinion in opinions[1]:
+                opinions_list.append(opinion[2])
+        return opinions_list
 
     @classmethod
     def distinct_opinion(cls, opinions):
@@ -146,31 +162,10 @@ class CommentParser(object):
 
         core_opinion_list = []
         core_opinion = self.parse_core_opinion(arcs, words, postags, core_opinion_list)
-        opinions = self.parse_label_opinion2(["v", "a", "i", "z"], arcs, words, postags)
+        opinions = self.parse_label_opinion(["v", "a", "i", "z"], arcs, words, postags)
         return core_opinion, opinions
 
-    def parse_label_opinion(self, labels, words):
-        """
-        解释role提取观点
-        :param labels:
-        :param words:
-        :return:
-        """
-        shorts = []
-        for label in labels:
-            # 谓词索引
-            verb_index = label.index
-            # 该谓词若干语义角色
-            roles = label.arguments
-
-            verb_word = words[verb_index]
-            short = ""
-            for role in roles:
-                short += "".join(words[role.range.start:role.range.end + 1])
-            shorts.append(short + verb_word)
-        return shorts
-
-    def parse_label_opinion2(self, core_pos, arcs, words, postags):
+    def parse_label_opinion(self, core_pos, arcs, words, postags):
         """
         给出核心词性，解释所有该词性的短语观点
         :param core_pos:
@@ -181,9 +176,9 @@ class CommentParser(object):
         """
         opinions = []
         for n, arc in enumerate(arcs):
-            if arc.relation in [Dependency.HED.value, Dependency.COO.value]:
+            postag = postags[n]
+            if postag in [Pos.v.value, Pos.a.value, Pos.i.value] or arc.relation in [Dependency.HED.value, Dependency.COO.value]:
                 core_opinion_list = []
-                postag = postags[n]
                 core_opinion_list = self.parse_opinion(n, arcs, words, postags)
 
                 # if postag == "v" and words[n] not in ["有", "想"]:
@@ -365,16 +360,20 @@ class CommentParser(object):
         # print(comment + ":{0}".format(segment))
         return segment
 
-    def sentence_segment_by_bland(self, comment, stopword_list={}):
+    def sentence_segment_by_bland(self, comment, segment_type="ltp", stopword_list={}):
         """
         使用空格间隔分词
         如：
         我们 喜欢 吃 冰激凌
         :param comment: 一条语料
+        :param segment_type: 分词工具
         :param stopword_list: 停用词列表
         :return:
         """
-        segment = self.sentence_segment_jieba(comment, stopword_list)
+        if segment_type == "ltp":
+            segment = self.segmentor.segment(comment)
+        elif segment_type == "jieba":
+            segment = self.sentence_segment_jieba(comment, stopword_list)
         return " ".join(segment)
 
     def construct_pow(self, use_stopwords):
@@ -394,6 +393,26 @@ class CommentParser(object):
                     dictionary.add(word)
         print(dictionary)
 
+    def train_opinion_tfidf(self, opinions):
+        texts = []  # 矩阵
+        for opinion in opinions:
+            texts.append([word for word in self.sentence_segment_by_bland(opinion).split()])
+        dictionary = corpora.Dictionary(texts)
+        print(dictionary)
+        corpus = [dictionary.doc2bow(text) for text in texts]
+        # initialize a model
+        tfidf = models.TfidfModel(corpus)
+        print(tfidf)
+        corpus_tfidf = tfidf[corpus]
+
+        for doc in corpus_tfidf:
+            print(doc)
+
+        tfidf_dictionary = {}
+        for n, word in enumerate(dictionary):
+            pass
+        return tfidf_dictionary
+
     def train_tfidf(self):
         """
         计算词袋里的词的重要性指标tfidf
@@ -403,8 +422,8 @@ class CommentParser(object):
         tfidfdict = {}
         with open("../data/comment", "r") as comments:
             for comment in comments:
-                corpus.append(self.sentence_segment_by_bland(comment))
-        vectorizer = CountVectorizer(stop_words=self.stopwordlist("之前", "是因为", "已经"))
+                corpus.append(self.sentence_segment_by_bland())
+        vectorizer = CountVectorizer(stop_words=self.load_stopword("之前", "是因为", "已经"))
         transformer = TfidfTransformer()
         tfidf = transformer.fit_transform(vectorizer.fit_transform(corpus))
         word = vectorizer.get_feature_names()  # 获取词袋模型中的所有词语
@@ -430,28 +449,21 @@ class CommentParser(object):
         jb_analyse.set_stop_words("../data/stopwords")
         jb_analyse.set_idf_path("../data/sk_tfidf.txt")
 
-    def triple_extract(self, comment):
-        extractor = TripleExtractor()
-        svos = extractor.triples_main(comment)
-        print(svos)
-
     def smart_split_sentence(self, comment):
-        sentences = re.split('(。|！|，|、|？|\.|!|,|\?)', comment)
-        for sentence in sentences:
-            words = self.segmentor.segment(comment)
-            postags = self.postagger.postag(words)
+        subcomments = re.split(r'[。|！|，|、|？|\.|!|,|\?]', self.format_sentence(comment))
+        return subcomments
 
     def format_sentence(self, comment):
         try:
-            index = comment.index("因为")
+            index = comment.rfind("因为")
             if index < 0:
-                index = comment.index("由于")
+                index = comment.rfind("由于")
             comment = comment[index + 2:]
         except ValueError:
             pass
         return re.sub(re.compile(r"(\s+)", re.S), "，", comment.strip())
 
-    def available_composition(self, parent_pos, parent_word, current_arc_relation, current_arc_pos, current_word):
+    def word_self_attention(self, parent_pos, parent_word, current_arc_relation, current_arc_pos, current_word):
         """
             判断词性与依存关系组合的有效性
         :param parent_pos: 父节点的词性
@@ -466,7 +478,8 @@ class CommentParser(object):
                 return True
             if current_arc_relation == Dependency.VOB.value:
                 return True
-            if current_arc_relation == Dependency.ADV.value and current_word in self.adv_dict_list.get("肯否副词"):
+            if current_arc_relation == Dependency.ADV.value and (current_word in self.adv_dict_list.get("肯否副词")
+                                                                 or (current_arc_pos == Pos.p.value and current_word in ["由", "用"])):  # 由关晓彤代言
                 return True
             if current_arc_relation == Dependency.ATT.value:
                 return True
@@ -475,7 +488,8 @@ class CommentParser(object):
         elif parent_pos == Pos.a.value:
             if current_arc_relation == Dependency.SBV.value:  # e.g.:材料新鲜
                 return True
-            if current_arc_relation == Dependency.ADV.value and (current_word not in self.adv_dict_list.get("程度副词") + self.adv_dict_list.get("范围副词") or (current_arc_pos == Pos.p.value and current_word in ["比"])):  # 比别家好
+            if current_arc_relation == Dependency.ADV.value and (current_word not in self.adv_dict_list.get("程度副词") + self.adv_dict_list.get("范围副词")
+                                                                 or (current_arc_pos == Pos.p.value and current_word in ["比"])):  # 比别家好
                 return True
             if current_arc_relation == Dependency.ATT.value:
                 return True
@@ -485,6 +499,10 @@ class CommentParser(object):
             if current_arc_relation == Dependency.ATT.value:  # 属性语义修饰名词
                 return True
         elif parent_pos == Pos.p.value:
+            if current_arc_relation == Dependency.SBV.value:  # 他给我感觉
+                return True
+            if current_arc_relation == Dependency.VOB.value:  # 给我感觉
+                return True
             if current_arc_relation == Dependency.POB.value:  # 比别家好
                 return True
         elif parent_pos in [Pos.i.value, Pos.r.value, Pos.q.value] or current_arc_relation == Dependency.CMP.value:
@@ -528,16 +546,17 @@ class CommentParser(object):
 
                 parent_word_index = arc.head - 1
                 parent_word_tuple = (parent_word_index, arcs[parent_word_index].relation, postags[parent_word_index], words[parent_word_index])
+
                 if arc.head == core_word_idx + 1 \
-                        and postags[core_word_index] not in [Pos.wp.value, Pos.o.value, Pos.c.value] \
-                        and self.available_composition(parent_word_tuple[2], parent_word_tuple[3], current_word_tuple[1], current_word_tuple[2], current_word_tuple[3]):
+                        and (current_word_tuple[2] not in [Pos.wp.value, Pos.o.value, Pos.c.value, Pos.r.value] or (current_word_tuple[2] == Pos.r.value and current_word_tuple[3] not in self.pronoun_list)) \
+                        and self.word_self_attention(parent_word_tuple[2], parent_word_tuple[3], current_word_tuple[1], current_word_tuple[2], current_word_tuple[3]):
 
                     """
                         计算词的root词是否等于关键词
                     """
                     root_core_index = word_root_index(core_word_index, m)
                     if root_core_index == core_word_index:
-                        if arc.relation == Dependency.VOB.value:
+                        if arc.relation == Dependency.VOB.value or (arc.relation == Dependency.CMP.value and postags[current_word_tuple[0]] == Pos.a.value):
                             has_vob = True
                             available_word_idx_list.append(m)
                             opinion_word_list.append(current_word_tuple)
@@ -548,7 +567,8 @@ class CommentParser(object):
                                     若是主谓结构先暂存，不加入观点词list
                                 """
                                 if arc.relation == Dependency.SBV.value:
-                                    sbv_word = current_word_tuple
+                                    if len(sbv_word) == 0:
+                                        sbv_word = current_word_tuple
                                 else:
                                     """
                                        计算词的root词是否等于sbv关键词
@@ -568,7 +588,8 @@ class CommentParser(object):
         """
         三元组判断，只有包含了动宾结构才把主谓结构加入
         """
-        if (has_vob or postags[core_word_index] == Pos.a.value) and len(sbv_word) > 0:
+        if (has_vob or postags[core_word_index] == Pos.a.value or words[core_word_index] in self.vi_list) \
+                and len(sbv_word) > 0:
             opinion_word_list.append(sbv_word)
             opinion_word_list += sbv_att_word_list
 
@@ -580,11 +601,22 @@ comment = "奶油和蛋糕的配置很合理，不会很腻，奶油的量恰到
 # train_tfidf()
 
 parser = CommentParser()
-# with open("../data/comment", "r", encoding="utf-8") as comments:
-#     for comment in comments:
-#         parser.sentence_segment_ltp(comment)
+# with open("../data/comment2", "r", encoding="utf-8") as comments:
+#     # for comment in comments:
+#     #     opinions = parser.sentence_segment_ltp(comment)
+#     #     print(comment, "main:", opinions[0], "others:", opinions[1], "\n")
+#
+#     opinions = parser.all_comment_opinions(comments)
+# print(opinions)
+# print(parser.train_opinion_tfidf(opinions))
 
-parser.sentence_segment_ltp("我觉得还好")
+subcomments = parser.smart_split_sentence("第一点是关晓彤是代言人，它本身就是一个具有话题的一个明星，第二，我觉得它会流行起来，它很方便，比较受学生欢迎，第三，它的外观做得也挺不错的")
+print(subcomments)
+for subcomment in subcomments:
+    opinions = parser.sentence_segment_ltp(subcomment)
+    print(subcomment, "main:", opinions[0], "others:", opinions[1], "\n")
+
+# parser.sentence_segment_ltp("用当红明星推荐，并且商品很好看")
 # parser.sentence_segment_ltp("做活动  买了几个  吃起来味道超级好  做活动还能保证口感  已经很厉害了")
 # parser.sentence_segment_ltp("最好不要再加上保护肾脏的")
 # parser.sentence_segment_ltp("吃一口觉得味蕾被迷住了")
