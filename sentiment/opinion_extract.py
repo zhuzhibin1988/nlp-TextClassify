@@ -1,8 +1,11 @@
+import logging
 from pyltp import Segmentor  # 分词
 from pyltp import Postagger  # 词性标注
 from pyltp import Parser  # 依存句法
 from pyltp import SementicRoleLabeller  # 角色标注
 from pyltp import SentenceSplitter  # 分句
+
+import time
 
 from sentiment.dependency import Dependency
 from sentiment.pos import Pos
@@ -13,6 +16,25 @@ import os
 LTP_MODEL_DIR = "/Users/zhuzhibin/Program/python/qd/nlp/data/ltp_data_v3.4.0"
 
 DICTIONARY_DIR = "../data/dictionary"
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+rq = time.strftime('%Y%m%d', time.localtime(time.time()))
+log_path = os.path.dirname(os.getcwd()) + '/logs/'
+log_name = log_path + rq + '.log'
+logfile = log_name
+# 输出到文件
+fh = logging.FileHandler(logfile, mode='a')
+fh.setLevel(logging.INFO)
+formatter = logging.Formatter("%(asctime)s - %(filename)s[line:%(lineno)d] - %(levelname)s: %(message)s")
+fh.setFormatter(formatter)
+logger.addHandler(fh)
+# 输出到控制台
+ch = logging.StreamHandler()
+ch.setLevel(logging.INFO)  # 输出到console的log等级的开关
+ch.setFormatter(formatter)
+logger.addHandler(ch)
 
 
 class OpinionExtractor(object):
@@ -61,6 +83,10 @@ class OpinionExtractor(object):
 
     @classmethod
     def __load_special_prefix_words(cls):
+        """
+        加载特别开始词
+        :return:
+        """
         special_prefix_words = []
         with open(os.path.join(DICTIONARY_DIR, "special_prefix.txt"), "r") as sp_file:
             for word in sp_file.readlines():
@@ -69,6 +95,10 @@ class OpinionExtractor(object):
 
     @classmethod
     def __load_intransitive_verb(cls):
+        """
+        加载不及物动词
+        :return:
+        """
         intransitive_verb = []
         with open(os.path.join(DICTIONARY_DIR, "intransitive_verb.txt"), "r") as vi_file:
             for word in vi_file.readlines():
@@ -77,6 +107,10 @@ class OpinionExtractor(object):
 
     @classmethod
     def __load_pronoun_words(cls):
+        """
+        加载代词
+        :return:
+        """
         pronoun_words = []
         with open(os.path.join(DICTIONARY_DIR, "pronoun.txt"), "r") as pronoun_file:
             for word in pronoun_file.readlines():
@@ -85,6 +119,10 @@ class OpinionExtractor(object):
 
     @classmethod
     def __load_adverb_dictionary(cls):
+        """
+        加载副词
+        :return:
+        """
         dictionary = {}
         with open(os.path.join(DICTIONARY_DIR, "adv.txt"), "r") as adv_file:
             for line in adv_file.readlines():
@@ -96,6 +134,10 @@ class OpinionExtractor(object):
 
     @classmethod
     def __load_auxiliary_dictionary(cls):
+        """
+        加载助词
+        :return:
+        """
         dictionary = {}
         with open(os.path.join(DICTIONARY_DIR, "auxiliary.txt"), "r") as adv_file:
             for line in adv_file.readlines():
@@ -105,7 +147,8 @@ class OpinionExtractor(object):
                 dictionary.update({key: value.split(" ")})
         return dictionary
 
-    def __smart_split_sentence(self, comment):
+    @classmethod
+    def __smart_split_sentence(cls, comment):
         """
         拆分句子
         :param comment:
@@ -132,7 +175,7 @@ class OpinionExtractor(object):
 
     def __word_self_attention(self, parent_pos, parent_word, current_arc_relation, current_arc_pos, current_word):
         """
-            判断词性与依存关系组合的有效性
+        判断词性与依存关系组合的有效性
         :param parent_pos: 父节点的词性
         :param parent_word: 父节点的词
         :param current_arc_relation: 当前节点的依存关系
@@ -271,6 +314,10 @@ class OpinionExtractor(object):
         do_parse_opinion(core_word_index)
 
         def need_sbv():
+            """
+            判断是否需要主谓结构
+            :return:
+            """
             # 三元组判断，只有包含了动宾结构才把主谓结构加入
             if has_vob:
                 return True
@@ -289,6 +336,14 @@ class OpinionExtractor(object):
         return opinion_word_list
 
     def extract_opinion(self, comment, distinct_opinion=True, show_core_word=False, show_detail=False):
+        """
+        抽取观点
+        :param comment:
+        :param distinct_opinion: 是否去重观点
+        :param show_core_word: 是否展示观点核心词
+        :param show_detail: 是否展示分词等详细信息
+        :return:
+        """
         subcomments = self.__smart_split_sentence(comment)
         opinion_list = []
         for subcomment in subcomments:
@@ -348,11 +403,11 @@ class OpinionExtractor(object):
         labels = self.__labeller.label(words, postags, arcs)  # 语义角色标注
 
         if show_detail:
-            print("|".join(words))
-            print("  ".join('|'.join(tpl) for tpl in word_tag_tuple_list))
-            print("  ".join("%d|%d:%s" % (n, arc.head, arc.relation) for n, arc in enumerate(arcs)))
+            logger.info("|".join(words))
+            logger.info("  ".join('|'.join(tpl) for tpl in word_tag_tuple_list))
+            logger.info("  ".join("%d|%d:%s" % (n, arc.head, arc.relation) for n, arc in enumerate(arcs)))
             for label in labels:
-                print(label.index, "".join(["%s:(%d,%d)" % (arg.name, arg.range.start, arg.range.end) for arg in label.arguments]))
+                logger.info(str(label.index) + ":" + ",".join(["%s:(%d,%d)" % (arg.name, arg.range.start, arg.range.end) for arg in label.arguments]))
 
         # opinions = self.__parse_main_opinion(arcs, words, postags)
         opinions = self.__parse_opinions(arcs, words, postags)
@@ -469,7 +524,7 @@ def main():
     # print(opinion_extractor.extract_opinion("极不专业的动作，舞蹈和鼓都是", show_core_word=True, show_detail=True))
     # print(opinion_extractor.extract_opinion("比较青春活力", show_core_word=True, show_detail=True))
     # print(opinion_extractor.extract_opinion("是应该比较出名的小姑娘", show_core_word=True, show_detail=True))
-    print(opinion_extractor.extract_opinion("个人对于甜品口味比较挑剔", distinct_opinion=True, show_core_word=True, show_detail=True))
+    logger.info(opinion_extractor.extract_opinion("不腻", distinct_opinion=True, show_core_word=True, show_detail=True))
     opinion_extractor.release()
 
 
