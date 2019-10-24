@@ -1,6 +1,8 @@
 import random
 import os
 from pyltp import Segmentor, Postagger, Parser, SementicRoleLabeller
+from sentiment.pos import Pos
+from sentiment.dependency import Dependency
 
 LTP_MODEL_DIR = "E:/02program/python/nlp/data/ltp_data_v3.4.0"
 
@@ -32,8 +34,18 @@ def process_corpus():
             dependency = parser.parse(segment, postag)
             seq_list = []
             for idx, node in enumerate(dependency):
-                seq_list.append(postag[idx])
-                # seq_list.append(node.relation)
+                word = segment[idx]
+                pos = postag[idx]
+                if pos.startswith("n"):
+                    pos = Pos.n.value
+                relation = node.relation
+                if relation not in [Dependency.ADV.value, Dependency.ATT.value]:
+                    seq_list.append(pos)
+                    seq_list.append(relation)
+                elif relation == Dependency.ADV.value and word == "不":
+                    seq_list.append(pos)
+                    seq_list.append("不")
+                    seq_list.append(relation)
             seq = "-".join(seq_list)
             if seq_dict.__contains__(seq):
                 seq_dict[seq] += 1
