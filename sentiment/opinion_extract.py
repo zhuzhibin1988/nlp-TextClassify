@@ -176,6 +176,8 @@ class OpinionExtractor(object):
     def __word_self_attention(self, parent_pos, parent_word, current_arc_relation, current_arc_pos, current_word):
         """
         判断词性与依存关系组合的有效性
+
+        词注意力机制
         :param parent_pos: 父节点的词性
         :param parent_word: 父节点的词
         :param current_arc_relation: 当前节点的依存关系
@@ -505,6 +507,16 @@ class OpinionExtractor(object):
         return new_opinion
 
 
+def handle_comment():
+    import json
+    comment_list = []
+    with open("../data/comment", "r", encoding="utf-8") as comments:
+        for comment in comments:
+            comment_list.append(comment.strip())
+    comments = json.dumps({"comment": comment_list}, ensure_ascii=False)
+    print(str(comments))
+
+
 def main():
     opinion_extractor = OpinionExtractor()
     # with open("../data/comment4", "r", encoding="utf-8") as comments:
@@ -529,4 +541,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    handle_comment()

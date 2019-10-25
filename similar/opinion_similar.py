@@ -14,7 +14,7 @@ from sklearn.feature_extraction.text import TfidfTransformer
 
 from sentiment.opinion_extract import OpinionExtractor
 
-WORD_2_VEC_PATH = "/Users/zhuzhibin/Program/python/qd/nlp/data/词向量/min.sgns.baidubaike.bigram-char"
+WORD_2_VEC_PATH = "/Users/zhuzhibin/Program/python/qd/nlp/data/词向量/sgns.baidubaike.bigram-char"
 
 
 # WORD_2_VEC_PATH = "/Users/zhuzhibin/Program/python/qd/nlp/data/词向量/Tencent_AILab_ChineseEmbedding.txt"
@@ -25,20 +25,18 @@ class OpinionSimilar(object):
     观点相似度
     """
 
-    def __init__(self, embedding):
+    def __init__(self):
         self.opinion_extract = OpinionExtractor()
-
-        # self.embedding = self.__load_embedding()
-        self.embedding = embedding
+        self.embedding = self.__load_embedding()
 
     @classmethod
     def __load_embedding(cls):
         print("开始加载词向量")
-        word2vector = KeyedVectors.load_word2vec_format(WORD_2_VEC_PATH, binary=False)  # 使用预训练的词向量
+        embedding = KeyedVectors.load_word2vec_format(WORD_2_VEC_PATH, binary=False)  # 使用预训练的词向量
         print("加载词向量完成")
-        return word2vector
+        return embedding
 
-    def check_content_similar(self, content1, content2, embedding, tfidf=None):
+    def check_content_similar(self, content1, content2, tfidf=None):
         """
         计算短句相似度
         :param content1:
@@ -47,7 +45,7 @@ class OpinionSimilar(object):
         :param tfidf:
         :return:
         """
-        dist = self.__cosin_distance(self.sentence_to_vector(content1, embedding, tfidf), self.sentence_to_vector(content2, embedding, tfidf))
+        dist = self.__cosin_distance(self.sentence_to_vector(content1, self.embedding, tfidf), self.sentence_to_vector(content2, self.embedding, tfidf))
         return dist
 
     @classmethod
@@ -76,7 +74,7 @@ class OpinionSimilar(object):
                 sentence_vector += embedding[word]
             else:
                 sentence_vector += embedding[word] * tfidf[word]
-        # sentence_vector = sentence_vector / len(words)
+        sentence_vector = sentence_vector / len(words)
         return sentence_vector
 
     def train_tf(self, corpora):
@@ -180,17 +178,17 @@ def main():
     #         corpora += [opinion for opinion in opinion_extractor.extract_opinion(comment.strip())]
     # print(corpora)
 
-    opinions = []
-    with open("../data/comment", "r", encoding="utf-8") as comments:
-        for comment in comments:
-            opinions += opinion_extractor.extract_opinion(comment)
-    opinion_classify_dict = opinion_cluster(opinions)
+    # opinions = []
+    # with open("../data/comment", "r", encoding="utf-8") as comments:
+    #     for comment in comments:
+    #         opinions += opinion_extractor.extract_opinion(comment)
+    # opinion_classify_dict = opinion_cluster(opinions)
+    #
+    # for item in opinion_classify_dict.items():
+    #     print("category", item[0], ":", item[1])
 
-    for item in opinion_classify_dict.items():
-        print("category", item[0], ":", item[1])
-
-    # opinion_similar = OpinionSimilar()
-    # print(opinion_similar.check_content_similar("榴莲味浓郁", "包装颜值高"))
+    opinion_similar = OpinionSimilar()
+    print(opinion_similar.check_content_similar("京东", "淘宝"))
     # print(opinion_similar.check_content_similar("包装清新", "觉得味可滋包装很差"))
 
 
