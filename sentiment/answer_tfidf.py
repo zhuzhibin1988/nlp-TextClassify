@@ -12,7 +12,6 @@ import re
 
 from sentiment.dependency import Dependency
 from sentiment.pos import Pos
-from sentiment.triple_extraction import TripleExtractor
 
 from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer  # 算法工具
 import numpy as np  # 矩阵工具
@@ -29,7 +28,11 @@ import os
 4.计算句子的tfidf vector
 5.关键词提取
 """
-LTP_MODEL_DIR = "/Users/zhuzhibin/Program/python/qd/nlp/data/ltp_data_v3.4.0"
+LTP_MODEL_DIR = "/Users/zhuzhibin/Program/python/qd/nlp/nlp-platform/opinion-data/ltp-model"
+
+DICTIONARY_DIR = "/Users/zhuzhibin/Program/python/qd/nlp/nlp-platform/opinion-data/opn-model"
+
+STOPWORDS_DIR = "/Users/zhuzhibin/Program/python/qd/nlp/nlp-platform/opinion-data/stopwords"
 
 
 class CommentParser(object):
@@ -39,8 +42,8 @@ class CommentParser(object):
         self.parser = Parser()  # 初始化实例
         self.labeller = SementicRoleLabeller()  # 初始化实例
 
-        self.segmentor.load(os.path.join(LTP_MODEL_DIR, "cws.model"))
-        self.postagger.load(os.path.join(LTP_MODEL_DIR, "pos.model"))
+        self.segmentor.load_with_lexicon(os.path.join(LTP_MODEL_DIR, "cws.model"), os.path.join(DICTIONARY_DIR, "custom_lexicon.model"))
+        self.postagger.load_with_lexicon(os.path.join(LTP_MODEL_DIR, "pos.model"), os.path.join(DICTIONARY_DIR, "custom_lexicon.model"))
         self.parser.load(os.path.join(LTP_MODEL_DIR, "parser.model"))  # 加载模型
         self.labeller.load(os.path.join(LTP_MODEL_DIR, "pisrl.model"))  # 加载模型
 
@@ -62,7 +65,7 @@ class CommentParser(object):
         :param self_define_stopwords: add self define stop word to stopwords list
         :return: stopwords_list
         """
-        stopwords_list = [word.strip() for word in open("../data/stopwords.txt", "r").readlines()]
+        stopwords_list = [word.strip() for word in open(os.path.join(STOPWORDS_DIR, "stopwords.txt"), "r").readlines()]
         for stopword in self_define_stopwords:
             stopwords_list.append(stopword)
         return stopwords_list
@@ -70,14 +73,14 @@ class CommentParser(object):
     @classmethod
     def load_intransitive_verb(cls):
         intransitive_verb = []
-        with open("../data/intransitive_verb.txt", "r") as vi_file:
+        with open(os.path.join(DICTIONARY_DIR, "intransitive_verb.model"), "r") as vi_file:
             for word in vi_file.readlines():
                 intransitive_verb.append(word.strip())
         return intransitive_verb
 
     @classmethod
     def load_pronoun_words(cls):
-        with open("../data/pronoun.txt", "r") as pronoun_file:
+        with open(os.path.join(DICTIONARY_DIR, "pronoun.model"), "r") as pronoun_file:
             for line in pronoun_file.readlines():
                 pronoun_list = line.split(" ")
         return pronoun_list
@@ -85,7 +88,7 @@ class CommentParser(object):
     @classmethod
     def load_adverb_dictionary(cls):
         dictionary = {}
-        with open("../data/adv.txt", "r") as adv_file:
+        with open(os.path.join(DICTIONARY_DIR, "adv.model"), "r") as adv_file:
             for line in adv_file.readlines():
                 index = line.index(":")
                 key = line[0: index].strip()
@@ -94,7 +97,7 @@ class CommentParser(object):
         return dictionary
 
     def sentence_segment_ltp(self, comment, print_each=True):
-        comment = self.format_sentence(comment)
+        # comment = self.format_sentence(comment)
         words = self.segmentor.segment(comment)
         opinions = self.sentence_segment(words, print_each)
         # print(comment, self.distinct_opinion(list(opinions)))
@@ -610,17 +613,20 @@ parser = CommentParser()
 # print(opinions)
 # print(parser.train_opinion_tfidf(opinions))
 
-subcomments = parser.smart_split_sentence("第一点是关晓彤是代言人，它本身就是一个具有话题的一个明星，第二，我觉得它会流行起来，它很方便，比较受学生欢迎，第三，它的外观做得也挺不错的")
-print(subcomments)
-for subcomment in subcomments:
-    opinions = parser.sentence_segment_ltp(subcomment)
-    print(subcomment, "main:", opinions[0], "others:", opinions[1], "\n")
+# subcomments = parser.smart_split_sentence("第一点是关晓彤是代言人，它本身就是一个具有话题的一个明星，第二，我觉得它会流行起来，它很方便，比较受学生欢迎，第三，它的外观做得也挺不错的")
+# print(subcomments)
+# for subcomment in subcomments:
+#     opinions = parser.sentence_segment_ltp(subcomment)
+#     print(subcomment, "main:", opinions[0], "others:", opinions[1], "\n")
 
-# parser.sentence_segment_ltp("用当红明星推荐，并且商品很好看")
+# parser.sentence_segment_ltp("第一次吃的时候，感觉不会特别甜，里面的蛋糕也很软，有淡淡的甜味")
+parser.sentence_segment_ltp("第一次吃的时候，感觉不会特别甜，里面的蛋糕也很软，有淡淡的甜味")
+# parser.sentence_segment_ltp("因为有关晓彤")
+# parser.sentence_segment_ltp("一个貌似是榴莲千层雪的蛋糕")
 # parser.sentence_segment_ltp("做活动  买了几个  吃起来味道超级好  做活动还能保证口感  已经很厉害了")
 # parser.sentence_segment_ltp("最好不要再加上保护肾脏的")
 # parser.sentence_segment_ltp("吃一口觉得味蕾被迷住了")
-# parser.sentence_segment_ltp("第一次吃的时候，感觉不会特别甜，里面的蛋糕也很软，有淡淡的甜味 ")
+parser.sentence_segment_ltp("买过榴莲味道的蛋糕。真材实料。配上白巧克力，特别好吃")
 # parser.sentence_segment_ltp("做活动  买了几个  吃起来味道超级好  做活动还能保证口感  已经很厉害了")
 # parser.sentence_segment_ltp("朋友推荐，自己尝试，吃了不腻")
 # parser.sentence_segment_ltp("购买过一次四重奏，四种口味都非常喜欢。以后就喜欢上了幸福西饼的蛋糕")

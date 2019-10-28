@@ -536,9 +536,9 @@ def main():
     # print(opinion_extractor.extract_opinion("极不专业的动作，舞蹈和鼓都是", show_core_word=True, show_detail=True))
     # print(opinion_extractor.extract_opinion("比较青春活力", show_core_word=True, show_detail=True))
     # print(opinion_extractor.extract_opinion("是应该比较出名的小姑娘", show_core_word=True, show_detail=True))
-    logger.info(opinion_extractor.extract_opinion("不腻", distinct_opinion=True, show_core_word=True, show_detail=True))
+    logger.info(opinion_extractor.extract_opinion("让人心旷神怡", distinct_opinion=True, show_core_word=True, show_detail=True))
     opinion_extractor.release()
 
 
 if __name__ == '__main__':
-    handle_comment()
+    main()

@@ -1,0 +1,7 @@
+语料提取
+why语料
+select comment from nlp_comment_eztalk where question_name like '%为什么%' or question_name like '%原因%'
+which语料
+select comment from nlp_comment_eztalk where question_name like '%哪些%'
+what语料
+select comment from nlp_comment_eztalk where question_name like '%什么%' and question_name not like '%为什么%'

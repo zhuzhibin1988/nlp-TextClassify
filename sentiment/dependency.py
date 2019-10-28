@@ -75,3 +75,6 @@ class Dependency(Enum):
     # head
     # 指整个句子的核心
     HED = "HED"
+
+    # 符号
+    WP = "WP"
