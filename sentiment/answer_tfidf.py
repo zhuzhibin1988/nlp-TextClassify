@@ -604,10 +604,10 @@ comment = "奶油和蛋糕的配置很合理，不会很腻，奶油的量恰到
 # train_tfidf()
 
 parser = CommentParser()
-# with open("../data/comment2", "r", encoding="utf-8") as comments:
-#     # for comment in comments:
-#     #     opinions = parser.sentence_segment_ltp(comment)
-#     #     print(comment, "main:", opinions[0], "others:", opinions[1], "\n")
+# with open("../data/comment3", "r", encoding="utf-8") as comments:
+#     for comment in comments:
+#         opinions = parser.sentence_segment_ltp(comment)
+#         print(comment, "main:", opinions[0], "others:", opinions[1], "\n")
 #
 #     opinions = parser.all_comment_opinions(comments)
 # print(opinions)
@@ -619,14 +619,15 @@ parser = CommentParser()
 #     opinions = parser.sentence_segment_ltp(subcomment)
 #     print(subcomment, "main:", opinions[0], "others:", opinions[1], "\n")
 
-# parser.sentence_segment_ltp("第一次吃的时候，感觉不会特别甜，里面的蛋糕也很软，有淡淡的甜味")
-parser.sentence_segment_ltp("第一次吃的时候，感觉不会特别甜，里面的蛋糕也很软，有淡淡的甜味")
+parser.sentence_segment_ltp("没有不专业的动作")
+# parser.sentence_segment_ltp("控油好不好要看洗完头后多久能保持清爽的效果")
+# parser.sentence_segment_ltp("苹果好不好")
 # parser.sentence_segment_ltp("因为有关晓彤")
 # parser.sentence_segment_ltp("一个貌似是榴莲千层雪的蛋糕")
 # parser.sentence_segment_ltp("做活动  买了几个  吃起来味道超级好  做活动还能保证口感  已经很厉害了")
 # parser.sentence_segment_ltp("最好不要再加上保护肾脏的")
 # parser.sentence_segment_ltp("吃一口觉得味蕾被迷住了")
-parser.sentence_segment_ltp("买过榴莲味道的蛋糕。真材实料。配上白巧克力，特别好吃")
+# parser.sentence_segment_ltp("买过榴莲味道的蛋糕。真材实料。配上白巧克力，特别好吃")
 # parser.sentence_segment_ltp("做活动  买了几个  吃起来味道超级好  做活动还能保证口感  已经很厉害了")
 # parser.sentence_segment_ltp("朋友推荐，自己尝试，吃了不腻")
 # parser.sentence_segment_ltp("购买过一次四重奏，四种口味都非常喜欢。以后就喜欢上了幸福西饼的蛋糕")

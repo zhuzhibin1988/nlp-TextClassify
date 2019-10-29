@@ -1,5 +1,7 @@
 import random
 from pyltp import Segmentor, Postagger, Parser, SementicRoleLabeller
+
+from gensim.models import KeyedVectors
 from pyhanlp import *
 import jieba
 from sentiment.pos import Pos
@@ -27,6 +29,7 @@ test = []
 
 negative_feature_words = ["不", "没有", "没", "无"]
 auxiliary_feature_words = ["吗", "呢", "吧", "啊", "呀", "哇", "哦", "哪", "啦", "噢", "叭", "咦", "哈"]
+verb_ignore_feature_words = ["会", "是", "有", "要"]
 
 
 def smart_split_doc(doc):
@@ -581,7 +584,7 @@ def extract_opinion2(comment):
     segment = segmentor.segment(comment)
     postag = postagger.postag(segment)
     dependency = parser.parse(segment, postag)
-    term_list = extract_rule(segment, postag, dependency)
+    term_list = extract_rule2(segment, postag, dependency)
     return "".join(term_list)
 
 
@@ -593,6 +596,138 @@ def extract_opinion3(comment):
         if len(opinion) > 0:
             opinion_list.append(opinion)
     return opinion_list
+
+
+def extract_rule2(segment, postag, dependency):
+    def term_root_index(core_idx, idx, dependency, parent=True):
+        """
+        查找词的root index
+        :return:
+        """
+        if parent:
+            dependency_node = dependency[idx]
+            index = idx if dependency_node.relation in [Dependency.HED.value, Dependency.COO.value] else dependency_node.head - 1
+            if index == core_idx or index == idx:
+                return index
+            else:
+                return term_root_index(core_idx, index, dependency, parent)
+        else:
+            find_root = False
+            index = idx
+            for node_idx, node in enumerate(dependency):
+                if node.head - 1 == index:
+                    find_root = True
+                    index = node_idx
+                    break
+
+            if not find_root:
+                return idx
+            if index == core_idx:
+                return core_idx
+            else:
+                return term_root_index(core_idx, index, dependency, parent)
+
+    match = False
+    term_list = []
+    # 专有名词模板
+    length = len(segment)
+    for idx in range(0, length):
+        term = segment[idx]
+        pos = postag[idx]
+        # i 类型的词要大于2个字，否则当作形容词
+        if pos in [Pos.nh.value, Pos.j.value, Pos.nz.value, Pos.ni.value, Pos.z.value] or (pos == Pos.i.value and len(term) > 2):
+            term_list = [term]
+            match = True
+            break
+
+    if not match:
+        # 形容词模板
+        for idx in range(0, length):
+            term = segment[idx]
+            pos = postag[idx]
+            dependency_node = dependency[idx]
+            # i 类型的词要小于等于2个字
+            if (pos == Pos.a.value or (pos == Pos.i.value and len(term) <= 2)) and dependency_node.relation != Dependency.ADV.value:
+                core_adj_idx = idx
+                core_term_idx = 0
+
+                # 检测下个词是否是形容词
+                new_core_adj_idx = core_adj_idx
+                for next_idx in range(min(length, core_adj_idx + 1), length):
+                    if postag[next_idx] == Pos.a.value and new_core_adj_idx + 1 == next_idx:
+                        new_core_adj_idx = next_idx
+                    else:
+                        break
+                core_adj_idx = new_core_adj_idx
+                core_term = segment[core_adj_idx]
+                term_list = [core_term]
+
+                # n 是 a结构，转移"是"的索引为core索引
+                if dependency_node.relation == Dependency.VOB.value:
+                    if segment[dependency_node.head - 1] == "是":
+                        core_adj_idx = dependency_node.head - 1
+
+                for n_idx in range(core_adj_idx - 1, -1, -1):
+                    term = segment[n_idx]
+                    pos = postag[n_idx]
+                    dependency_node = dependency[n_idx]
+                    if term in negative_feature_words:
+                        root_id = term_root_index(core_adj_idx, n_idx, dependency)
+                        if root_id != core_adj_idx:
+                            root_id = term_root_index(core_adj_idx, n_idx, dependency, False)
+                        if root_id == core_adj_idx:
+                            term_list.insert(0, term)
+                            core_term_idx += 1
+                    if pos == Pos.n.value and dependency_node.relation != Dependency.POB.value:
+                        root_id = term_root_index(core_adj_idx, n_idx, dependency)
+                        if root_id != core_adj_idx:
+                            root_id = term_root_index(core_adj_idx, n_idx, dependency, False)
+                        if root_id == core_adj_idx:
+                            term_list.insert(0, term)
+                            core_term_idx += 1
+                            match = True
+                            break
+                for n_idx in range(core_adj_idx + 1, length):
+                    term = segment[n_idx]
+                    pos = postag[n_idx]
+                    if term in negative_feature_words:
+                        root_id = term_root_index(core_adj_idx, n_idx, dependency)
+                        if root_id != core_adj_idx:
+                            root_id = term_root_index(core_adj_idx, n_idx, dependency, False)
+                        if root_id == core_adj_idx:
+                            term_list.insert(0, term)
+                            core_term_idx += 1
+                    if pos == Pos.n.value and dependency_node.relation != Dependency.POB.value:
+                        root_id = term_root_index(core_adj_idx, n_idx, dependency)
+                        if root_id != core_adj_idx:
+                            root_id = term_root_index(core_adj_idx, n_idx, dependency, False)
+                        if root_id == core_adj_idx:
+                            term_list.insert(0, term)
+                            core_term_idx += 1
+                            match = True
+                            break
+
+                # 形容词的以上规则没找到则找否定词
+                if not match:
+                    term_list = [core_term]
+                    for negative_idx in range(0, length):
+                        term = segment[negative_idx]
+                        if term in negative_feature_words:
+                            root_id = term_root_index(core_adj_idx, negative_idx, dependency)
+                            if root_id != core_adj_idx:
+                                root_id = term_root_index(core_adj_idx, negative_idx, dependency, False)
+                            if root_id == core_adj_idx:
+                                term_list.insert(0, term)
+                                core_term_idx += 1
+                                match = True
+
+                if not match:
+                    term_list = [core_term]
+                break
+
+    if not match:
+        pass
+    return term_list
 
 
 def extract_rule(segment, postag, dependency):
@@ -786,6 +921,113 @@ def extract_rule(segment, postag, dependency):
     return term_list
 
 
+def doc_to_vector(segment, embedding):
+    doc_vector = np.zeros(300)
+    for term in segment:
+        term_vector = np.zeros(300)
+        if term in embedding.vocab:
+            term_vector = embedding[term]
+        doc_vector += term_vector
+    doc_vector = doc_vector / len(segment)
+    return doc_vector
+
+
+def cosin_distance(segment1, segment2, embedding):
+    """
+    计算两个向量的余弦距离
+    :param segment1:
+    :param segment2:
+    :return:
+    """
+    if "".join(segment1) == "".join(segment2):
+        return 1.00001
+    vector1 = doc_to_vector(segment1, embedding)
+    vector2 = doc_to_vector(segment2, embedding)
+    cos_distance = np.dot(vector1, vector2) / (np.linalg.norm(vector1) * (np.linalg.norm(vector2)))
+    return cos_distance
+
+
+def cluster_rule(docs):
+    cluster = {}
+    print("load embedding")
+    embedding = KeyedVectors.load_word2vec_format("/Users/zhuzhibin/Program/python/qd/nlp/nlp-platform/opinion-data/embedding/min.sgns.baidubaike.bigram-char.model", binary=False)
+
+    doc_segment_list = [[term for term in segmentor.segment(doc)] for doc in docs]
+    doc_postag_list = [[pos for pos in postagger.postag(segment)] for segment in doc_segment_list]
+
+    # 按特征聚类
+    feature_cluster = {}
+    for doc_idx, doc_postag in enumerate(doc_postag_list):
+        doc_segment = doc_segment_list[doc_idx]
+        classify = False
+        # 查找特征
+        for pos_idx, pos in enumerate(doc_postag):
+            term = doc_segment[pos_idx]
+            if pos in [Pos.nh.value, Pos.j.value, Pos.nz.value, Pos.ni.value, Pos.z.value] or pos == Pos.n.value or (pos == Pos.i.value and len(term) > 2):
+                if len(feature_cluster) == 0:
+                    feature_cluster[term] = [(doc_segment, doc_postag)]
+                    classify = True
+                    break
+                else:
+                    for feature, feature_segment_list in feature_cluster.items():
+                        if cosin_distance([feature], [term], embedding) > 0.8:
+                            feature_segment_list.append((doc_segment, doc_postag))
+                            classify = True
+                            break
+                    if not classify:
+                        feature_cluster[term] = [(doc_segment, doc_postag)]
+                        classify = True
+                        break
+                    break
+        if not classify:
+            if not feature_cluster.__contains__("other"):
+                feature_cluster["other"] = []
+            feature_cluster["other"].append((doc_segment, doc_postag))
+
+    # 按特征观点聚类
+    feature_opinion_cluster = {}
+    for item in feature_cluster.items():
+        feature = item[0]
+        feature_segment_postag_list = item[1]
+        for doc_segment, doc_postag in feature_segment_postag_list:
+            classify = False
+            for pos_idx, pos in enumerate(doc_postag):
+                term = doc_segment[pos_idx]
+                if pos == Pos.a.value or (pos == Pos.i.value and len(term) <= 2):
+                    if len(feature_opinion_cluster) == 0:
+                        feature_opinion_cluster[str(feature + "|" + term)] = [(doc_segment, doc_postag)]
+                        classify = True
+                        break
+                    else:
+                        for feature_opinion, feature_opinion_segment_list in feature_opinion_cluster.items():
+                            if cosin_distance(feature_opinion.split("|"), [feature, term], embedding) > 0.8:
+                                feature_opinion_segment_list.append((doc_segment, doc_postag))
+                                classify = True
+                                break
+                        if not classify:
+                            feature_opinion_cluster[str(feature + "|" + term)] = [(doc_segment, doc_postag)]
+                            classify = True
+                            break
+                        break
+            if not classify:
+                for feature_opinion, feature_opinion_segment_list in feature_opinion_cluster.items():
+                    if cosin_distance(feature_opinion.split("|"), [feature], embedding) > 0.8:
+                        feature_opinion_segment_list.append((doc_segment, doc_postag))
+                        classify = True
+                        break
+                if not classify:
+                    feature_opinion_cluster[feature] = [(doc_segment, doc_postag)]
+
+    for n, item in enumerate(feature_opinion_cluster.items()):
+        doc_segment_list = []
+        doc_segment_postag_list = item[1]
+        for segment, postag in doc_segment_postag_list:
+            doc_segment_list.append("".join(segment))
+        cluster[n] = doc_segment_list
+
+    return cluster
+
+
 # load_corpus()
 # # process_corpus()
 # model = train_model()
@@ -795,5 +1037,8 @@ def extract_rule(segment, postag, dependency):
 # f1 = compute_f1_score(test, model)
 # print(f1)
 
-# print(smart_split_doc("我爱吃榴莲。买过榴莲味道的蛋糕。真材实料。配上白巧克力，特别好吃"))
-print(extract_opinion3("我爱吃榴莲"))
+# print(smart_split_doc("第一次吃的时候，感觉不会特别甜，里面的蛋糕也很软，有淡淡的甜味"))
+print(extract_opinion3("没有不专业的动作"))
+embedding = KeyedVectors.load_word2vec_format("/Users/zhuzhibin/Program/python/qd/nlp/nlp-platform/opinion-data/embedding/min.sgns.baidubaike.bigram-char.model", binary=False)
+print(cosin_distance(["不"], ["没有", "不"], embedding))
+# 蛋糕多是现做的水果多是新鲜的
