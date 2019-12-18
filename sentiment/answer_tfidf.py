@@ -34,6 +34,8 @@ DICTIONARY_DIR = "/Users/zhuzhibin/Program/python/qd/nlp/nlp-platform/opinion-da
 
 STOPWORDS_DIR = "/Users/zhuzhibin/Program/python/qd/nlp/nlp-platform/opinion-data/stopwords"
 
+COMMENT_DIR = "/Users/zhuzhibin/Program/python/qd/nlp/TextClassify/data"
+
 
 class CommentParser(object):
     def __init__(self):
@@ -423,10 +425,10 @@ class CommentParser(object):
         """
         corpus = []
         tfidfdict = {}
-        with open("../data/comment", "r") as comments:
+        with open(os.path.join(COMMENT_DIR, "comments/tfidf", "comment"), "r") as comments:
             for comment in comments:
-                corpus.append(self.sentence_segment_by_bland())
-        vectorizer = CountVectorizer(stop_words=self.load_stopword("之前", "是因为", "已经"))
+                corpus.append(self.sentence_segment_by_bland(comment))
+        vectorizer = CountVectorizer()
         transformer = TfidfTransformer()
         tfidf = transformer.fit_transform(vectorizer.fit_transform(corpus))
         word = vectorizer.get_feature_names()  # 获取词袋模型中的所有词语
@@ -619,10 +621,20 @@ parser = CommentParser()
 #     opinions = parser.sentence_segment_ltp(subcomment)
 #     print(subcomment, "main:", opinions[0], "others:", opinions[1], "\n")
 
-parser.sentence_segment_ltp("没有不专业的动作")
-# parser.sentence_segment_ltp("控油好不好要看洗完头后多久能保持清爽的效果")
-# parser.sentence_segment_ltp("苹果好不好")
-# parser.sentence_segment_ltp("因为有关晓彤")
+# parser.sentence_segment_ltp("因为西北部地区缺水相对严重，有的时候看新闻会看到，就顺便关注了一下，毕竟都是自己的同胞，还有水是生命之源嘛大家都会关注点的")
+# parser.sentence_segment_ltp("但是也没有办法")
+# parser.sentence_segment_ltp("不会有怨言")
+# parser.sentence_segment_ltp("吃了不腻")
+# parser.sentence_segment_ltp("没有过于甜腻")
+# parser.sentence_segment_ltp("一般国民品牌都是被很多人所认可的")
+
+# parser.sentence_segment_ltp("孩子喝了健康")
+# parser.sentence_segment_ltp("能让孩子很好的吸收")
+# parser.train_tfidf()
+import emoji
+
+# parser.sentence_segment_ltp(emoji.demojize("❤❤回购 坚持使用吧 抗老是个漫长的道路 加油(ง •̀_•́)ง"))
+parser.sentence_segment_ltp("ಡωಡ")
 # parser.sentence_segment_ltp("一个貌似是榴莲千层雪的蛋糕")
 # parser.sentence_segment_ltp("做活动  买了几个  吃起来味道超级好  做活动还能保证口感  已经很厉害了")
 # parser.sentence_segment_ltp("最好不要再加上保护肾脏的")

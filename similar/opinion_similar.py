@@ -25,12 +25,12 @@ class OpinionSimilar(object):
     观点相似度
     """
 
-    def __init__(self):
+    def __init__(self, embedding):
         self.opinion_extract = OpinionExtractor()
-        self.embedding = self.__load_embedding()
+        self.embedding = embedding
 
     @classmethod
-    def __load_embedding(cls):
+    def load_embedding(cls):
         print("开始加载词向量")
         embedding = KeyedVectors.load_word2vec_format(WORD_2_VEC_PATH, binary=False)  # 使用预训练的词向量
         print("加载词向量完成")
@@ -49,7 +49,7 @@ class OpinionSimilar(object):
         return dist
 
     @classmethod
-    def __cosin_distance(cls, vector1, vector2):
+    def cosin_distance(cls, vector1, vector2):
         """
         计算两个向量的余弦距离
         :param vector1:

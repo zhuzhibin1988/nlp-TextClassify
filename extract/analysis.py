@@ -4,6 +4,8 @@ from pyltp import Segmentor, Postagger, Parser, SementicRoleLabeller
 from gensim.models import KeyedVectors
 from pyhanlp import *
 import jieba
+from sklearn.feature_extraction.text import TfidfVectorizer
+
 from sentiment.pos import Pos
 from sentiment.dependency import Dependency
 import numpy as np
@@ -27,18 +29,71 @@ labeller.load(os.path.join(LTP_MODEL_DIR, "pisrl.model"))  # 加载模型
 train = []
 test = []
 
-negative_feature_words = ["不", "没有", "没", "无"]
+negative_feature_words = ["不", "没有", "没", "无", "暂时"]
 auxiliary_feature_words = ["吗", "呢", "吧", "啊", "呀", "哇", "哦", "哪", "啦", "噢", "叭", "咦", "哈"]
 verb_ignore_feature_words = ["会", "是", "有", "要"]
 
+special_prefix_model = "/Users/zhuzhibin/Program/python/qd/nlp/nlp-platform/opinion-data/opn-model/special_prefix.model"
 
-def smart_split_doc(doc):
+
+def load_special_prefix_words(special_prefix_model):
+    """
+    加载特别开始词
+    :return:
+    """
+    special_prefix_words = []
+    with open(special_prefix_model, "r", encoding="utf-8") as sp_file:
+        for word in sp_file.readlines():
+            special_prefix_words.append(word.strip())
+    return special_prefix_words
+
+
+special_prefix_list = load_special_prefix_words(special_prefix_model)
+
+
+def remove_special_word(doc_segment):
+    """
+    移除特殊词
+    :param self:
+    :param doc:
+    :return:
+    """
+    first_term = doc_segment[0]
+    if first_term in special_prefix_list:
+        doc_segment.pop(0)
+        return remove_special_word(doc_segment)
+    return doc_segment
+
+
+def doc_split(doc):
+    doc = re.sub(re.compile(r"(\s+)", re.S), "，", doc.strip())
+    pattern = "[" + "|".join(auxiliary_feature_words) + "]"
+    doc = re.sub(re.compile(pattern, re.S), "", doc.strip())
+    # doc = re.sub(re.compile(r"[吗|呢|吧|啊|呀|哇|哦|哪|啦|噢|叭|咦|哈|的]", re.S), "", doc.strip())
+    sub_doc_list = re.split(r'[。|！|，|、|？|\.|!|,|\?]', doc)
+    sub_doc_segment_list = []
+    for sub_doc in sub_doc_list:
+        doc_segment = remove_special_word([term for term in segmentor.segment(sub_doc)])
+        sub_doc_segment_list.append("".join(doc_segment))
+    return sub_doc_segment_list
+
+
+def smart_doc_split(doc):
     """智能分句"""
     doc = re.sub(re.compile(r"(\s+)", re.S), "，", doc.strip())
-    doc = re.sub(re.compile(r"[吗|呢|吧|啊|呀|哇|哦|哪|啦|噢|叭|咦|哈]", re.S), "", doc.strip())
+    pattern = "[" + "|".join(auxiliary_feature_words) + "]"
+    doc = re.sub(re.compile(pattern, re.S), "", doc.strip())
+    # doc = re.sub(re.compile(r"[吗|呢|吧|啊|呀|哇|哦|哪|啦|噢|叭|咦|哈|的]", re.S), "", doc.strip())
     sub_doc_list = []
 
-    def term_root_index(core_idx, idx, before_relation, hed_pos, segment, dependency):
+    def format_doc(doc):
+        _format_doc = re.sub(re.compile(r"[。|！|，|、|？|\.|!|,|\?]", re.S), "", doc.strip())
+        return _format_doc
+
+    def term_distance(core_id, idx):
+        return np.math.fabs(core_id - idx)
+
+    def term_root_idx_search(core_idx, idx, before_relation, hed_pos, segment, dependency):
         """
         查找词的root index
         :return:
@@ -46,12 +101,11 @@ def smart_split_doc(doc):
         node = dependency[idx]
         term = segment[idx]
         index = idx if node.relation == Dependency.HED.value \
-                       or (node.relation == Dependency.COO.value and before_relation == Dependency.LAD.value) \
-                       or (node.relation == Dependency.COO.value and term != "是") else node.head - 1
+                       or (node.relation == Dependency.COO.value and (before_relation != Dependency.LAD.value and term not in ["只是", "是"])) else node.head - 1
         if index == core_idx or index == idx:
             return index
         else:
-            return term_root_index(core_idx, index, node.relation, hed_pos, segment, dependency)
+            return term_root_idx_search(core_idx, index, node.relation, hed_pos, segment, dependency)
 
     def do_smart_split(document):
         term_list = []
@@ -69,26 +123,48 @@ def smart_split_doc(doc):
 
         before_relation = None
         new_document_term_list = []
+        # 处理COO的附和问题
+        core_idx_list = [core_idx]
         for idx, node in enumerate(dependency):
+            # term是否已被使用
             used = False
             pos = postag[idx]
             term = segment[idx]
             relation = node.relation
-            if (relation == Dependency.COO.value and (before_relation == Dependency.LAD.value or term == "是")) or relation != Dependency.COO.value:
-                root_idx = term_root_index(core_idx, idx, before_relation, hed_pos, segment, dependency)
-                if root_idx == core_idx:
+            if (relation == Dependency.COO.value and (before_relation == Dependency.LAD.value or term in ["只是", "是"])) or relation != Dependency.COO.value:
+                same_root = False
+                for __core_idx in core_idx_list:
+                    root_idx = term_root_idx_search(__core_idx, idx, before_relation, hed_pos, segment, dependency)
+                    if root_idx == __core_idx:
+                        same_root = True
+                        break
+                if same_root:
                     if before_relation == Dependency.WP.value and relation == Dependency.WP.value:
                         continue
                     before_relation = relation
                     term_list.append(segment[idx])
                     used = True
+                # 增加"LAD"后的"COO"词为核心词，即右附和词
+                if relation == Dependency.COO.value:
+                    core_idx_list.append(idx)
             if not used:
                 new_document_term_list.append(term)
-        sub_doc = "".join(term_list)
 
         new_document = "".join(new_document_term_list)
-        sub_doc = re.sub(re.compile(r"[。|！|，|、|？|\.|!|,|\?]", re.S), "", sub_doc.strip())
-        sub_doc_list.append(sub_doc)
+
+        # lad_doc = False
+        # for idx, term in enumerate(term_list):
+        #     if dependency[idx].relation == Dependency.LAD.value:
+        #         left_sub_doc = "".join(term_list[0:idx])
+        #         right_sub_doc = "".join(term_list[idx + 1:len(term_list)])
+        #         sub_doc_list.append(format_doc(left_sub_doc))
+        #         sub_doc_list.append(format_doc(right_sub_doc))
+        #         lad_doc = True
+        #         break
+        # if not lad_doc:
+        sub_doc = "".join(term_list)
+        sub_doc_list.append(format_doc(sub_doc))
+
         if len(new_document) > 0:
             return do_smart_split(new_document)
 
@@ -580,25 +656,33 @@ def compute_f1_score(corpus, model, show_detail=False):
     return f1
 
 
-def extract_opinion2(comment):
-    segment = segmentor.segment(comment)
-    postag = postagger.postag(segment)
-    dependency = parser.parse(segment, postag)
-    term_list = extract_rule2(segment, postag, dependency)
-    return "".join(term_list)
-
-
-def extract_opinion3(comment):
+def extract_why_opinion(comment):
     opinion_list = []
-    sub_doc_list = smart_split_doc(comment)
+    sub_doc_list = smart_doc_split(comment)
     for sub_doc in sub_doc_list:
-        opinion = extract_opinion2(sub_doc)
+        segment = segmentor.segment(sub_doc)
+        postag = postagger.postag(segment)
+        dependency = parser.parse(segment, postag)
+        opinion = extract_why_rule(segment, postag, dependency)
         if len(opinion) > 0:
             opinion_list.append(opinion)
     return opinion_list
 
 
-def extract_rule2(segment, postag, dependency):
+def extract_which_opinion(comment):
+    opinion_list = []
+    sub_doc_list = smart_doc_split(comment)
+    for sub_doc in sub_doc_list:
+        segment = segmentor.segment(sub_doc)
+        postag = postagger.postag(segment)
+        dependency = parser.parse(segment, postag)
+        opinion = extract_which_rule(segment, postag, dependency)
+        if len(opinion) > 0:
+            opinion_list.append("".join(opinion))
+    return opinion_list
+
+
+def extract_why_rule(segment, postag, dependency):
     def term_root_index(core_idx, idx, dependency, parent=True):
         """
         查找词的root index
@@ -730,7 +814,224 @@ def extract_rule2(segment, postag, dependency):
     return term_list
 
 
-def extract_rule(segment, postag, dependency):
+def term_root_idx_full_search(core_idx, idx, dependency):
+    """
+    双向查找词的root索引
+    :param core_idx:
+    :param idx:
+    :param dependency:
+    :return: root id
+    """
+    index = term_root_idx_search(core_idx, idx, dependency)
+    if index != core_idx:
+        index = term_root_idx_search(core_idx, idx, dependency, False)
+    return index
+
+
+def term_root_idx_search(core_idx, idx, dependency, parent=True):
+    def do_term_root_idx_search(_core_idx, _idx, _dependency):
+        _dependency_node = _dependency[_idx]
+        _index = _idx if _dependency_node.relation in [Dependency.HED.value, Dependency.COO.value] else _dependency_node.head - 1
+        if _index == _core_idx or _index == _idx:
+            return _index
+        else:
+            return do_term_root_idx_search(_core_idx, _index, _dependency)
+
+    core_index = core_idx
+    index = idx
+    if not parent:
+        core_index = idx
+        index = core_idx
+
+    _root_id = do_term_root_idx_search(core_index, index, dependency)
+
+    if core_index == _root_id:
+        return core_idx
+    else:
+        return _root_id
+
+
+def extract_which_rule(segment, postag, dependency):
+    """
+        以名词为核心词
+        主要模式：ATT+n，v+n，a+n
+        :param docs:
+        :return:
+        """
+    match = False
+    negative_term_count = 0
+    length = len(segment)
+    term_list = []
+
+    for idx in range(0, length):
+        term = segment[idx]
+        pos = postag[idx]
+
+        if pos in [Pos.nh.value, Pos.nt.value, Pos.j.value, Pos.nz.value, Pos.ni.value, Pos.z.value]:
+            term_list = [term]
+            match = True
+            break
+
+    if not match:
+        # 名词+形容词模板
+        for idx in range(0, length):
+            term = segment[idx]
+            pos = postag[idx]
+            if pos == Pos.b.value:
+                pos = Pos.n.value
+            dependency_node = dependency[idx]
+            if not match and pos == Pos.n.value and dependency_node.relation == Dependency.SBV.value:
+                core_n_idx = idx
+                core_term = term
+
+                negative_term_count = 0
+                core_term_idx = 0
+                term_list = [core_term]
+
+                for adj_idx in range(0, length):
+                    term = segment[adj_idx]
+                    pos = postag[adj_idx]
+                    if term in negative_feature_words:
+                        root_id = term_root_idx_full_search(core_n_idx, adj_idx, dependency)
+                        if root_id == core_n_idx:
+                            term_list.insert(core_term_idx, term)
+                            core_term_idx += 1
+                            negative_term_count += 1
+                    if pos == Pos.a.value:
+                        root_id = term_root_idx_full_search(core_n_idx, adj_idx, dependency)
+                        if root_id == core_n_idx:
+                            if adj_idx < core_n_idx:
+                                term_list.insert(core_term_idx, term)
+                                core_term_idx += 1
+                            else:
+                                term_list.append(term)
+                            match = True
+
+    if not match:
+        # 名词（ATT）+名词模板
+        for idx in range(0, length):
+            term = segment[idx]
+            pos = postag[idx]
+            if pos == Pos.b.value:
+                pos = Pos.n.value
+
+            if not match and pos == Pos.n.value and dependency_node.relation != Dependency.ATT.value:
+                core_n_idx = idx
+                core_term = term
+
+                negative_term_count = 0
+                core_term_idx = 0
+                term_list = [core_term]
+
+                for n_idx in range(0, length):
+                    term = segment[n_idx]
+                    pos = postag[n_idx]
+                    if pos == Pos.b.value:
+                        pos = Pos.n.value
+                    dependency_node = dependency[n_idx]
+                    if pos == Pos.n.value and dependency_node.relation == Dependency.ATT.value:
+                        root_id = term_root_idx_full_search(core_n_idx, n_idx, dependency)
+                        if root_id == core_n_idx:
+                            if n_idx < core_n_idx:
+                                term_list.insert(core_term_idx, term)
+                                core_term_idx += 1
+                            else:
+                                term_list.append(term)
+                            match = True
+    if not match:
+        # 名词（VOB/FOB）+动词模板
+        for idx in range(0, length):
+            term = segment[idx]
+            pos = postag[idx]
+            if pos == Pos.b.value:
+                pos = Pos.n.value
+            dependency_node = dependency[idx]
+            if not match and pos == Pos.n.value and dependency_node.relation in [Dependency.VOB.value, Dependency.FOB.value]:
+                core_n_idx = idx
+                core_term = term
+
+                negative_term_count = 0
+                core_term_idx = 0
+                term_list = [core_term]
+
+                for v_idx in range(0, length):
+                    term = segment[v_idx]
+                    pos = postag[v_idx]
+                    v_dependency_node = dependency[idx]
+                    if term in negative_feature_words:
+                        root_id = term_root_idx_full_search(core_n_idx, v_idx, dependency)
+                        if root_id == core_n_idx:
+                            term_list.insert(core_term_idx, term)
+                            core_term_idx += 1
+                            negative_term_count += 1
+                    if pos == Pos.v.value and v_dependency_node == Dependency.HED.value:
+                        root_id = term_root_idx_full_search(core_n_idx, v_idx, dependency)
+                        if root_id == core_n_idx:
+                            if v_idx < core_n_idx:
+                                term_list.insert(core_term_idx, term)
+                                core_term_idx += 1
+                            else:
+                                term_list.append(term)
+                            match = True
+
+        if not match:
+            # 名词（SBV）+动词模板
+            for idx in range(0, length):
+                term = segment[idx]
+                pos = postag[idx]
+                if pos == Pos.b.value:
+                    pos = Pos.n.value
+                dependency_node = dependency[idx]
+                if not match and pos == Pos.n.value and dependency_node.relation == Dependency.SBV.value:
+                    core_n_idx = idx
+                    core_term = term
+
+                    negative_term_count = 0
+                    core_term_idx = 0
+                    term_list = [core_term]
+
+                    for v_idx in range(0, length):
+                        term = segment[v_idx]
+                        pos = postag[v_idx]
+                        v_dependency_node = dependency[idx]
+                        if term in negative_feature_words:
+                            root_id = term_root_idx_full_search(core_n_idx, v_idx, dependency)
+                            if root_id == core_n_idx:
+                                term_list.insert(core_term_idx, term)
+                                core_term_idx += 1
+                                negative_term_count += 1
+                        if pos == Pos.v.value and v_dependency_node == Dependency.HED.value:
+                            root_id = term_root_idx_full_search(core_n_idx, v_idx, dependency)
+                            if root_id == core_n_idx:
+                                if v_idx < core_n_idx:
+                                    term_list.insert(core_term_idx, term)
+                                    core_term_idx += 1
+                                else:
+                                    term_list.append(term)
+                                match = True
+
+    if not match:
+        for idx in range(0, length):
+            term = segment[idx]
+            pos = postag[idx]
+            if pos == Pos.b.value:
+                pos = Pos.n.value
+            dependency_node = dependency[idx]
+            if not match and pos == Pos.n.value and dependency_node.relation == Dependency.HED.value:
+                term_list = [term]
+                break;
+
+    result_term_list = []
+    if negative_term_count == 2:
+        for term in term_list:
+            if term not in negative_feature_words:
+                result_term_list.append((term, pos))
+    else:
+        result_term_list = term_list
+    return result_term_list
+
+
+def extract_why_rule(segment, postag, dependency):
     match = False
     term_list = []
     # 专有名词模板
@@ -947,7 +1248,48 @@ def cosin_distance(segment1, segment2, embedding):
     return cos_distance
 
 
-def cluster_rule(docs):
+def cluster_which_rule(docs):
+    doc_segment_list = [[term for term in segmentor.segment(doc)] for doc in docs]
+    doc_postag_list = [[pos for pos in postagger.postag(segment)] for segment in doc_segment_list]
+
+    all_term_list = []
+    pos_count_dict = {}
+    corpora = []
+    for doc_idx, doc_segment in enumerate(doc_segment_list):
+        doc_pos = doc_postag_list[doc_idx]
+        term_list = extract_which_rule(doc_segment, doc_pos, None)
+        all_term_list += term_list
+        for term, pos in term_list:
+            if not pos_count_dict.__contains__(pos):
+                pos_count_dict[pos] = 0
+            pos_count_dict[pos] += 1
+
+    main_pos = None
+    main_pos_count = 0
+
+    for pos, count in pos_count_dict.items():
+        if main_pos is None:
+            main_pos = pos
+            main_pos_count = count
+        else:
+            if count > main_pos_count:
+                main_pos = pos
+                main_pos_count = count
+
+    main_term_list = []
+    for term, pos in all_term_list:
+        if pos == main_pos:
+            main_term_list.append(term)
+
+    corpora = [" ".join(main_term_list)]
+    tfidf_model = TfidfVectorizer(analyzer='word', token_pattern=r"(?u)\b\w+\b")
+    tfidf = tfidf_model.fit_transform(corpora)
+    cbow = tfidf_model.get_feature_names()
+    return cbow
+
+
+def cluster_why_rule(docs):
+    UNKOWN_FEATURE = "unkown_feature"
     cluster = {}
     print("load embedding")
     embedding = KeyedVectors.load_word2vec_format("/Users/zhuzhibin/Program/python/qd/nlp/nlp-platform/opinion-data/embedding/min.sgns.baidubaike.bigram-char.model", binary=False)
@@ -980,9 +1322,9 @@ def cluster_rule(docs):
                         break
                     break
         if not classify:
-            if not feature_cluster.__contains__("other"):
-                feature_cluster["other"] = []
-            feature_cluster["other"].append((doc_segment, doc_postag))
+            if not feature_cluster.__contains__(UNKOWN_FEATURE):
+                feature_cluster[UNKOWN_FEATURE] = []
+            feature_cluster[UNKOWN_FEATURE].append((doc_segment, doc_postag))
 
     # 按特征观点聚类
     feature_opinion_cluster = {}
@@ -1037,8 +1379,11 @@ def cluster_rule(docs):
 # f1 = compute_f1_score(test, model)
 # print(f1)
 
-# print(smart_split_doc("第一次吃的时候，感觉不会特别甜，里面的蛋糕也很软，有淡淡的甜味"))
-print(extract_opinion3("没有不专业的动作"))
-embedding = KeyedVectors.load_word2vec_format("/Users/zhuzhibin/Program/python/qd/nlp/nlp-platform/opinion-data/embedding/min.sgns.baidubaike.bigram-char.model", binary=False)
-print(cosin_distance(["不"], ["没有", "不"], embedding))
+print(doc_split("本奶粉可以给孩子一个好的未来，让孩子强壮"))
+print(doc_split("因为西北部地区缺水相对严重，有的时候看新闻会看到，就顺便关注了一下，毕竟都是自己的同胞，还有水是生命之源嘛大家都会关注点的"))
+
+# print(extract_opinion2("这个个大品牌身边朋友有很多都是选择的这个"))
+# embedding = KeyedVectors.load_word2vec_format("/Users/zhuzhibin/Program/python/qd/nlp/nlp-platform/opinion-data/embedding/sgns.baidubaike.bigram-char.model", binary=False)
+# print(cosin_distance(["好"], ["不好"], embedding))
+# print(cosin_distance(["冷萃"], ["方便"], embedding))
 # 蛋糕多是现做的水果多是新鲜的

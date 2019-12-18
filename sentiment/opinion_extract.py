@@ -510,7 +510,7 @@ class OpinionExtractor(object):
 def handle_comment():
     import json
     comment_list = []
-    with open("../data/comment", "r", encoding="utf-8") as comments:
+    with open("../data/comments/why/comment1", "r", encoding="utf-8") as comments:
         for comment in comments:
             comment_list.append(comment.strip())
     comments = json.dumps({"comment": comment_list}, ensure_ascii=False)
@@ -541,4 +541,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    handle_comment()
